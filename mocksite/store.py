@@ -1,10 +1,12 @@
-"""Small SQLite persistence layer for downloaded match data."""
+"""Small, resilient SQLite persistence layer for provider data."""
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,6 +14,7 @@ log = logging.getLogger("mocksite.store")
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = ROOT / "data" / "sandbox.sqlite3"
+WRITE_RETRIES = 3
 
 
 def db_path() -> Path:
@@ -21,10 +24,26 @@ def db_path() -> Path:
 def connect(path: str | Path | None = None) -> sqlite3.Connection:
     selected = Path(path) if path is not None else db_path()
     selected.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(selected)
+    connection = sqlite3.connect(selected, timeout=2.0)
     connection.execute("PRAGMA foreign_keys = ON")
     create_schema(connection)
     return connection
+
+
+def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")}
+
+
+def _add_columns(connection: sqlite3.Connection, table: str, definitions: dict[str, str]) -> None:
+    existing = _columns(connection, table)
+    for name, definition in definitions.items():
+        if name in existing:
+            continue
+        try:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
 
 
 def create_schema(connection: sqlite3.Connection) -> None:
@@ -57,9 +76,72 @@ def create_schema(connection: sqlite3.Connection) -> None:
             FOREIGN KEY (home_team_id) REFERENCES teams(team_id),
             FOREIGN KEY (away_team_id) REFERENCES teams(team_id)
         );
+        CREATE TABLE IF NOT EXISTS api_payloads (
+            payload_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            endpoint TEXT NOT NULL,
+            match_id TEXT,
+            fetched_at TEXT NOT NULL,
+            source TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS match_stats_snapshots (
+            snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            match_id TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            metric TEXT NOT NULL,
+            home_value TEXT,
+            away_value TEXT,
+            total_value TEXT,
+            raw_json TEXT,
+            FOREIGN KEY (match_id) REFERENCES matches(match_id)
+        );
+        CREATE TABLE IF NOT EXISTS match_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            match_id TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            minute INTEGER,
+            extra_minute INTEGER,
+            team_side TEXT,
+            event_type TEXT,
+            detail TEXT,
+            player_id TEXT,
+            player_name TEXT,
+            assist_player_id TEXT,
+            assist_player_name TEXT,
+            player_in_id TEXT,
+            player_in_name TEXT,
+            player_out_id TEXT,
+            player_out_name TEXT,
+            raw_json TEXT NOT NULL,
+            FOREIGN KEY (match_id) REFERENCES matches(match_id)
+        );
         CREATE INDEX IF NOT EXISTS matches_league_idx ON matches(league_id);
+        CREATE INDEX IF NOT EXISTS api_payloads_match_idx ON api_payloads(match_id);
+        CREATE INDEX IF NOT EXISTS stats_match_idx ON match_stats_snapshots(match_id, fetched_at);
+        CREATE INDEX IF NOT EXISTS events_match_idx ON match_events(match_id, fetched_at);
         """
     )
+    _add_columns(
+        connection,
+        "matches",
+        {
+            "season_id": "TEXT",
+            "round_id": "TEXT",
+            "game_week": "INTEGER",
+            "status_localized": "TEXT",
+            "halftime_home": "INTEGER",
+            "halftime_away": "INTEGER",
+            "second_half_home": "INTEGER",
+            "second_half_away": "INTEGER",
+            "actual_home_xg": "REAL",
+            "actual_away_xg": "REAL",
+            "venue_name": "TEXT",
+            "venue_location": "TEXT",
+            "winner": "TEXT",
+            "last_updated": "TEXT",
+        },
+    )
+    connection.commit()
 
 
 def _text(value: object | None) -> str | None:
@@ -67,9 +149,93 @@ def _text(value: object | None) -> str | None:
 
 
 def _number(value: object | None) -> int | float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value) if isinstance(value, float) else int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _value(value: object | None) -> str | None:
     if value is None:
         return None
-    return float(value) if isinstance(value, float) else int(value)
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value)
+
+
+def _run_write(writer, path: str | Path | None) -> object:
+    last_error: sqlite3.OperationalError | None = None
+    for attempt in range(WRITE_RETRIES):
+        try:
+            with connect(path) as connection:
+                result = writer(connection)
+                connection.commit()
+                return result
+        except sqlite3.OperationalError as exc:
+            last_error = exc
+            if attempt + 1 < WRITE_RETRIES:
+                time.sleep(0.05 * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("SQLite write failed")
+
+
+def _match_values(match: dict, fetched_at: str) -> tuple:
+    league = match.get("league") or {}
+    season = match.get("season") or {}
+    home = match.get("home_team") or {}
+    away = match.get("away_team") or {}
+    score = match.get("score") or {}
+    xg_payload = match.get("xg") or {}
+    prematch = xg_payload.get("prematch") or {}
+    actual_home_xg = xg_payload.get("home") if "home" in xg_payload else None
+    actual_away_xg = xg_payload.get("away") if "away" in xg_payload else None
+    match_id = _text(match.get("match_id"))
+    league_id = _text(league.get("league_id") or league.get("name") or "unknown")
+    home_id = _text(home.get("team_id") or home.get("team_name"))
+    away_id = _text(away.get("team_id") or away.get("team_name"))
+    kickoff = match.get("date_unix")
+    kickoff_utc = (
+        datetime.fromtimestamp(int(kickoff), tz=timezone.utc).isoformat()
+        if kickoff is not None
+        else None
+    )
+    season_year = _number(season.get("year"))
+    if season_year is None and kickoff is not None:
+        season_year = datetime.fromtimestamp(int(kickoff), tz=timezone.utc).year
+    last_updated = match.get("last_updated")
+    if isinstance(last_updated, dict):
+        last_updated = last_updated.get("synced_at") or last_updated.get("source_last_updated")
+    return (
+        match_id,
+        league_id,
+        season_year,
+        kickoff_utc,
+        match.get("status"),
+        home_id,
+        away_id,
+        _number(score.get("home")),
+        _number(score.get("away")),
+        _number(prematch.get("home") if "home" in prematch else xg_payload.get("prematch_home")),
+        _number(prematch.get("away") if "away" in prematch else xg_payload.get("prematch_away")),
+        fetched_at,
+        match.get("status_localized"),
+        _text(season.get("season_id")),
+        _text(match.get("round_id")),
+        _number(match.get("game_week")),
+        _number(score.get("halftime_home")),
+        _number(score.get("halftime_away")),
+        _number(score.get("second_half_home")),
+        _number(score.get("second_half_away")),
+        _number(actual_home_xg),
+        _number(actual_away_xg),
+        (match.get("venue") or {}).get("name") or (match.get("venue") or {}).get("stadium"),
+        (match.get("venue") or {}).get("location"),
+        match.get("winner_text") or score.get("winner"),
+        last_updated,
+    )
 
 
 def store_match_payloads(
@@ -78,28 +244,19 @@ def store_match_payloads(
     source: str,
     path: str | Path | None = None,
 ) -> int:
-    """Upsert provider-native match dictionaries and return the row count."""
+    """Upsert provider-native match dictionaries and return valid row count."""
     fetched_at = datetime.now(timezone.utc).isoformat()
-    with connect(path) as connection:
+
+    def write(connection: sqlite3.Connection) -> int:
+        stored = 0
         for match in payloads:
+            values = _match_values(match, fetched_at)
+            match_id, league_id, _, _, _, home_id, away_id, *_ = values
+            if not match_id or not home_id or not away_id:
+                continue
             league = match.get("league") or {}
             home = match.get("home_team") or {}
             away = match.get("away_team") or {}
-            score = match.get("score") or {}
-            xg_payload = match.get("xg") or {}
-            xg = xg_payload.get("prematch") or xg_payload
-            match_id = _text(match.get("match_id"))
-            league_id = _text(league.get("league_id") or league.get("name") or "unknown")
-            home_id = _text(home.get("team_id") or home.get("team_name"))
-            away_id = _text(away.get("team_id") or away.get("team_name"))
-            if not match_id or not home_id or not away_id:
-                continue
-            kickoff = match.get("date_unix")
-            kickoff_utc = (
-                datetime.fromtimestamp(int(kickoff), tz=timezone.utc).isoformat()
-                if kickoff is not None
-                else None
-            )
             connection.execute(
                 "INSERT INTO leagues(league_id, name, country) VALUES (?, ?, ?) "
                 "ON CONFLICT(league_id) DO UPDATE SET name=excluded.name, country=excluded.country",
@@ -112,31 +269,26 @@ def store_match_payloads(
             )
             connection.execute(
                 "INSERT INTO matches(match_id, league_id, season_year, kickoff_utc, status, "
-                "home_team_id, away_team_id, home_goals, away_goals, home_xg, away_xg, source, fetched_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(match_id) DO UPDATE SET league_id=excluded.league_id, "
-                "season_year=excluded.season_year, kickoff_utc=excluded.kickoff_utc, status=excluded.status, "
-                "home_team_id=excluded.home_team_id, away_team_id=excluded.away_team_id, "
-                "home_goals=excluded.home_goals, away_goals=excluded.away_goals, home_xg=excluded.home_xg, "
-                "away_xg=excluded.away_xg, source=excluded.source, fetched_at=excluded.fetched_at",
-                (
-                    match_id,
-                    league_id,
-                    datetime.fromtimestamp(int(kickoff), tz=timezone.utc).year if kickoff is not None else None,
-                    kickoff_utc,
-                    match.get("status"),
-                    home_id,
-                    away_id,
-                    _number(score.get("home")),
-                    _number(score.get("away")),
-                    _number(xg.get("home")),
-                    _number(xg.get("away")),
-                    source,
-                    fetched_at,
-                ),
+                "home_team_id, away_team_id, home_goals, away_goals, home_xg, away_xg, source, fetched_at, "
+                "status_localized, season_id, round_id, game_week, halftime_home, halftime_away, "
+                "second_half_home, second_half_away, actual_home_xg, actual_away_xg, venue_name, "
+                "venue_location, winner, last_updated) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(match_id) DO UPDATE SET league_id=excluded.league_id, season_year=excluded.season_year, "
+                "kickoff_utc=excluded.kickoff_utc, status=excluded.status, home_team_id=excluded.home_team_id, "
+                "away_team_id=excluded.away_team_id, home_goals=excluded.home_goals, away_goals=excluded.away_goals, "
+                "home_xg=excluded.home_xg, away_xg=excluded.away_xg, source=excluded.source, fetched_at=excluded.fetched_at, "
+                "status_localized=excluded.status_localized, season_id=excluded.season_id, round_id=excluded.round_id, "
+                "game_week=excluded.game_week, halftime_home=excluded.halftime_home, halftime_away=excluded.halftime_away, "
+                "second_half_home=excluded.second_half_home, second_half_away=excluded.second_half_away, "
+                "actual_home_xg=excluded.actual_home_xg, actual_away_xg=excluded.actual_away_xg, venue_name=excluded.venue_name, "
+                "venue_location=excluded.venue_location, winner=excluded.winner, last_updated=excluded.last_updated",
+                values[:11] + (source, values[11]) + values[12:],
             )
-        connection.commit()
-    return len(payloads)
+            stored += 1
+        return stored
+
+    return int(_run_write(write, path))
 
 
 def store_fixture_payloads(payloads: list[dict], *, source: str, path: str | Path | None = None) -> int:
@@ -145,7 +297,7 @@ def store_fixture_payloads(payloads: list[dict], *, source: str, path: str | Pat
     for match in payloads:
         score = match.get("matchResults") or []
         final = next((item for item in score if item.get("resultTypeID") == 2), score[-1] if score else {})
-        finished = bool(match.get("matchIsFinished")) and final
+        finished = bool(match.get("matchIsFinished")) and bool(final)
         kickoff = datetime.fromisoformat(match["matchDateTimeUTC"].replace("Z", "+00:00"))
         normalized.append(
             {
@@ -161,6 +313,130 @@ def store_fixture_payloads(payloads: list[dict], *, source: str, path: str | Pat
     return store_match_payloads(normalized, source=source, path=path)
 
 
+def store_api_payload(
+    payload: dict,
+    *,
+    endpoint: str,
+    source: str,
+    match_id: str | None = None,
+    path: str | Path | None = None,
+) -> None:
+    """Persist a successful provider response as JSON."""
+    fetched_at = datetime.now(timezone.utc).isoformat()
+
+    def write(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "INSERT INTO api_payloads(endpoint, match_id, fetched_at, source, payload_json) VALUES (?, ?, ?, ?, ?)",
+            (endpoint, match_id, fetched_at, source, json.dumps(payload, ensure_ascii=False, sort_keys=True)),
+        )
+
+    _run_write(write, path)
+
+
+def store_match_stats(
+    match_id: str,
+    stats: dict,
+    *,
+    source: str | None = None,
+    endpoint: str | None = None,
+    path: str | Path | None = None,
+) -> None:
+    del source, endpoint
+    fetched_at = datetime.now(timezone.utc).isoformat()
+
+    def write(connection: sqlite3.Connection) -> None:
+        for metric, values in stats.items():
+            if not isinstance(values, dict):
+                values = {"home": values}
+            connection.execute(
+                "INSERT INTO match_stats_snapshots(match_id, fetched_at, metric, home_value, away_value, total_value, raw_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    match_id,
+                    fetched_at,
+                    metric,
+                    _value(values.get("home")),
+                    _value(values.get("away")),
+                    _value(values.get("total")),
+                    json.dumps(values, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+
+    _run_write(write, path)
+
+
+def store_match_events(
+    match_id: str,
+    events: list[dict],
+    *,
+    source: str | None = None,
+    endpoint: str | None = None,
+    path: str | Path | None = None,
+) -> None:
+    del source, endpoint
+    fetched_at = datetime.now(timezone.utc).isoformat()
+
+    def write(connection: sqlite3.Connection) -> None:
+        for event in events:
+            player = event.get("player") or {}
+            assist = event.get("assist") or {}
+            player_in = event.get("player_in") or {}
+            player_out = event.get("player_out") or {}
+            connection.execute(
+                "INSERT INTO match_events(match_id, fetched_at, minute, extra_minute, team_side, event_type, detail, "
+                "player_id, player_name, assist_player_id, assist_player_name, player_in_id, player_in_name, "
+                "player_out_id, player_out_name, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    match_id,
+                    fetched_at,
+                    _number(event.get("minute")),
+                    _number(event.get("extra_minute")),
+                    event.get("team_side"),
+                    event.get("event_type"),
+                    event.get("detail"),
+                    _text(player.get("player_id")),
+                    player.get("player_name"),
+                    _text(assist.get("player_id")),
+                    assist.get("player_name"),
+                    _text(player_in.get("player_id")),
+                    player_in.get("player_name"),
+                    _text(player_out.get("player_id")),
+                    player_out.get("player_name"),
+                    json.dumps(event, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+
+    _run_write(write, path)
+
+
+def latest_match_stats(match_id: str, path: str | Path | None = None) -> list[sqlite3.Row]:
+    with connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        latest = connection.execute(
+            "SELECT MAX(fetched_at) FROM match_stats_snapshots WHERE match_id = ?", (match_id,)
+        ).fetchone()[0]
+        if latest is None:
+            return []
+        return connection.execute(
+            "SELECT * FROM match_stats_snapshots WHERE match_id = ? AND fetched_at = ? ORDER BY snapshot_id",
+            (match_id, latest),
+        ).fetchall()
+
+
+def latest_match_events(match_id: str, path: str | Path | None = None) -> list[sqlite3.Row]:
+    with connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        latest = connection.execute(
+            "SELECT MAX(fetched_at) FROM match_events WHERE match_id = ?", (match_id,)
+        ).fetchone()[0]
+        if latest is None:
+            return []
+        return connection.execute(
+            "SELECT * FROM match_events WHERE match_id = ? AND fetched_at = ? ORDER BY minute, event_id",
+            (match_id, latest),
+        ).fetchall()
+
+
 def safe_store(payloads: list[dict], *, source: str, path: str | Path | None = None) -> None:
     try:
         store_match_payloads(payloads, source=source, path=path)
@@ -169,7 +445,6 @@ def safe_store(payloads: list[dict], *, source: str, path: str | Path | None = N
 
 
 def store_fixtures(payloads: list[dict], *, source: str, path: str | Path | None = None) -> int:
-    """Public provider-neutral entry point for already normalized payloads."""
     return store_match_payloads(payloads, source=source, path=path)
 
 
@@ -179,10 +454,15 @@ def fetch_finished_matches(
     with connect(path) as connection:
         connection.row_factory = sqlite3.Row
         if league:
-            selected = connection.execute(
-                "SELECT league_id FROM leagues WHERE league_id = ? OR lower(name) LIKE ? LIMIT 1",
-                (league, f"%{league.lower()}%"),
-            ).fetchone()
+            if league.isdigit():
+                selected = connection.execute(
+                    "SELECT league_id FROM leagues WHERE league_id = ? LIMIT 1", (league,)
+                ).fetchone()
+            else:
+                selected = connection.execute(
+                    "SELECT league_id FROM leagues WHERE lower(name) LIKE ? LIMIT 1",
+                    (f"%{league.lower()}%",),
+                ).fetchone()
             if selected is None:
                 return []
             league_id = str(selected[0])

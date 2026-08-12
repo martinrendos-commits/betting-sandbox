@@ -10,26 +10,39 @@
   </ul>
   <p class="muted">
     Zdroj rozpisu: <b>{{ source }}</b> · režim hodín: <b>{{ clock_mode }}</b><br>
-    Rozpis a historické výsledky môžu byť reálne; minútové štatistiky a všetky kurzy
-    sú simulované lokálne.
+    Rozpis a historické výsledky môžu byť reálne; live štatistiky sú označené podľa
+    zdroja a všetky bookmaker kurzy zostávajú simulované lokálne.
   </p>
 </div>
 
-<div class="card">
-  <h3>Dnešný rozpis ({{ rows|length }})</h3>
-  <table>
-    <thead><tr><th>Výkop</th><th>Zápas</th><th>Stav</th></tr></thead>
+{% macro match_section(testid, title, rows, empty_text) -%}
+<section class="card" data-testid="{{ testid }}">
+  <h3>{{ title }} ({{ rows|length }})</h3>
+  <table data-testid="{{ testid }}-table">
+    <thead><tr><th>Výkop</th><th>Zápas</th><th>Skóre</th><th>Stav</th></tr></thead>
     <tbody>
     {% for fixture, state in rows %}
-      <tr>
+      <tr data-testid="match-row" data-match-id="{{ fixture.match_id }}" data-status="{{ state.status }}">
         <td>{{ fixture.kickoff }}</td>
-        <td>{{ fixture.home }} – {{ fixture.away }}</td>
+        <td>
+          {% if state.is_live %}
+          <a data-testid="match-link" href="/livescore/match/{{ fixture.match_id }}">{{ fixture.home }} – {{ fixture.away }}</a>
+          {% else %}
+          {{ fixture.home }} – {{ fixture.away }}
+          {% endif %}
+        </td>
+        <td>{{ state.home_goals }}:{{ state.away_goals }}</td>
         <td><span class="badge">{{ state.status }}</span></td>
       </tr>
     {% else %}
-      <tr><td colspan="3">Žiadne zápasy – skús iný deň alebo ligu (MOCK_DATE, MOCK_LEAGUE).</td></tr>
+      <tr><td colspan="4">{{ empty_text }}</td></tr>
     {% endfor %}
     </tbody>
   </table>
-</div>
+</section>
+{%- endmacro %}
+
+{{ match_section("live-section", "Live", live_rows, "Momentálne sa nehrá žiadny zápas.") }}
+{{ match_section("upcoming-section", "Budúce", upcoming_rows, "Žiadne nadchádzajúce zápasy.") }}
+{{ match_section("finished-section", "Dohrané", finished_rows, "Žiadne dohrané zápasy.") }}
 {% endblock %}

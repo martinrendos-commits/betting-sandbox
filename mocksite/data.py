@@ -11,6 +11,7 @@ import logging
 import math
 import os
 import random
+import threading
 import time
 from datetime import date
 
@@ -44,6 +45,7 @@ def poisson_sample(rng: random.Random, lam: float) -> int:
 FIXTURES: list[Fixture] = []
 FIXTURES_BY_ID: dict[str, Fixture] = {}
 _LAST_LOAD = 0.0
+_REFRESH_LOCK = threading.Lock()
 #: Providers whose schedule/status can change while the server runs.
 REMOTE_SOURCES = frozenset({"openliga", "footballdata"})
 
@@ -76,15 +78,39 @@ def refresh_if_stale() -> None:
     ``MOCK_REFRESH_S=0`` turns it off; the provider responses are cached on disk,
     so this does not mean one upstream request per page view.
     """
-    interval = float(os.environ.get("MOCK_REFRESH_S", "300"))
+    interval = float(os.environ.get("MOCK_REFRESH_S", "600"))
     if interval <= 0 or os.environ.get("MOCK_FIXTURES", "synthetic") not in REMOTE_SOURCES:
         return
-    if time.time() - _LAST_LOAD < interval:
+    with _REFRESH_LOCK:
+        if time.time() - _LAST_LOAD < interval:
+            return
+        try:
+            reload_fixtures()
+        except (OSError, RuntimeError, ValueError) as exc:
+            log.warning("Obnovenie rozpisu zlyhalo, ostávam pri poslednom: %s", exc)
+
+
+def refresh_remote_data() -> None:
+    """Refresh the in-memory schedule and persist the provider result feed."""
+    source = os.environ.get("MOCK_FIXTURES", "synthetic")
+    if source not in REMOTE_SOURCES:
         return
-    try:
+    with _REFRESH_LOCK:
         reload_fixtures()
-    except (OSError, RuntimeError, ValueError) as exc:
-        log.warning("Obnovenie rozpisu zlyhalo, ostávam pri poslednom: %s", exc)
+        if source == "footballdata":
+            from .fixtures_source import load_footballdata_results
+
+            load_footballdata_results()
+
+
+def refresh_live_data() -> None:
+    """Persist a bounded live feed and its detailed provider statistics."""
+    if os.environ.get("MOCK_FIXTURES", "synthetic") != "footballdata":
+        return
+    from .fixtures_source import load_footballdata_live
+
+    with _REFRESH_LOCK:
+        load_footballdata_live()
 
 
 reload_fixtures()

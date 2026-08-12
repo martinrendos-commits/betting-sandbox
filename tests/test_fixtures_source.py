@@ -122,6 +122,38 @@ def test_footballdata_provider_skips_finished_and_uses_prematch_xg(footballdata_
     assert [(m.home_goals, m.away_goals) for m in fixture.h2h] == [(2, 1)]
 
 
+def test_footballdata_live_stats_are_parsed_and_persisted(monkeypatch, tmp_path):
+    monkeypatch.setenv("FOOTBALLDATA_API_KEY", "fd_test_key")
+    monkeypatch.setenv("MOCK_DB_PATH", str(tmp_path / "live.sqlite3"))
+    live_match = {
+        "match_id": 77,
+        "date_unix": 1786492800,
+        "status": "incomplete",
+        "league": {"league_id": 9, "name": "Liga"},
+        "home_team": {"team_id": 10, "team_name": "A"},
+        "away_team": {"team_id": 11, "team_name": "B"},
+        "score": {"home": 1, "away": 0},
+    }
+
+    def fake_get(path, cache_key, max_age_s):
+        if path.startswith("fixtures/live"):
+            return {"matches": [live_match]}
+        if path.startswith("matches/77/stats"):
+            return {"stats": {"possession": {"home": None, "away": 52}, "shots": {"home": 4, "away": 2, "total": 6}}}
+        if path.startswith("matches/77/events"):
+            return {"events": [{"minute": 7, "team_side": "home", "event_type": "goal", "player": {"player_name": "A"}}]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(fixtures_source, "_footballdata_get", fake_get)
+    matches = fixtures_source.load_footballdata_live()
+    assert matches == [live_match]
+    from mocksite.store import connect, latest_match_events, latest_match_stats
+
+    assert [row["metric"] for row in latest_match_stats("77")] == ["possession", "shots"]
+    assert latest_match_stats("77")[0]["home_value"] is None
+    assert latest_match_events("77")[0]["event_type"] == "goal"
+
+
 def test_footballdata_league_filter_accepts_id_or_name(footballdata_api):
     by_id = fixtures_source.load_footballdata(date(2026, 8, 13), "12")
     by_name = fixtures_source.load_footballdata(date(2026, 8, 13), "premier league")

@@ -3,6 +3,7 @@ import pytest
 from mocksite import simulator
 from mocksite.app import create_app
 from mocksite.data import FIXTURES
+from mocksite.store import store_match_events, store_match_payloads, store_match_stats
 
 
 @pytest.fixture()
@@ -13,6 +14,53 @@ def client():
 def test_pages_render(client):
     for url in ["/", "/livescore/", "/livescore/match/m1", "/book/", "/book/live"]:
         assert client.get(url).status_code == 200
+
+
+def test_index_has_three_stable_sections(client):
+    body = client.get("/").get_data(as_text=True)
+    assert body.count('data-testid="live-section"') == 1
+    assert body.count('data-testid="upcoming-section"') == 1
+    assert body.count('data-testid="finished-section"') == 1
+    assert body.index('data-testid="live-section"') < body.index('data-testid="upcoming-section"')
+    assert body.index('data-testid="upcoming-section"') < body.index('data-testid="finished-section"')
+
+
+def test_simulated_detail_labels_provenance(client):
+    body = client.get("/livescore/match/m1").get_data(as_text=True)
+    assert "simulované" in body
+    assert 'data-testid="event-timeline"' in body
+
+
+def test_provider_detail_renders_all_stats_and_events(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOCK_DB_PATH", str(tmp_path / "provider.sqlite3"))
+    store_match_payloads(
+        [
+            {
+                "match_id": 1,
+                "date_unix": 1760000000,
+                "status": "incomplete",
+                "league": {"league_id": 9, "name": "Liga"},
+                "home_team": {"team_id": 10, "team_name": "Slovan Bratislava"},
+                "away_team": {"team_id": 11, "team_name": "Spartak Trnava"},
+            }
+        ],
+        source="footballdata",
+    )
+    store_match_stats(
+        "1",
+        {"possession": {"home": None, "away": 52}, "shots": {"home": 4, "away": 2, "total": 6}},
+    )
+    store_match_events(
+        "1",
+        [{"minute": 7, "team_side": "home", "event_type": "goal", "player": {"player_name": "Strelec"}}],
+    )
+    body = create_app().test_client().get("/livescore/match/m1").get_data(as_text=True)
+    assert "dáta z footballdata.io" in body
+    assert 'data-stat="possession"' in body
+    assert 'data-stat="shots"' in body
+    assert ">–<" in body
+    assert 'data-testid="event-row"' in body
+    assert "Strelec" in body
 
 
 def test_livescore_exposes_h2h_rows(client):

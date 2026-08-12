@@ -8,7 +8,11 @@
 
 <div class="card" data-testid="live-panel" data-match-id="{{ fixture.match_id }}"
      data-status="{{ state.status }}">
-  <h3>Live štatistiky</h3>
+  <h3>Live štatistiky
+    <span class="badge">
+      {% if live_details.source == "footballdata" %}dáta z footballdata.io{% else %}simulované{% endif %}
+    </span>
+  </h3>
   <p class="muted">
     {{ fixture.competition }} · výkop {{ fixture.kickoff }} ·
     <span data-field="status">{{ state.status }}</span>
@@ -18,13 +22,35 @@
     <strong data-field="score">{{ state.home_goals }}:{{ state.away_goals }}</strong>
   </p>
   <table data-testid="live-stats">
+    <thead><tr><th>Domáci</th><th>Štatistika</th><th>Hostia</th><th>Spolu</th></tr></thead>
     <tbody>
-      <tr data-stat="shots">
-        <td data-field="home">{{ state.home_shots }}</td><td>Strely</td><td data-field="away">{{ state.away_shots }}</td>
+    {% for stat in live_details.stats %}
+      <tr data-stat="{{ stat.metric }}">
+        <td data-field="home">{% if stat.home is none %}–{% else %}{{ stat.home }}{% endif %}</td>
+        <td>{{ stat.label }}</td>
+        <td data-field="away">{% if stat.away is none %}–{% else %}{{ stat.away }}{% endif %}</td>
+        <td data-field="total">{% if stat.total is none %}–{% else %}{{ stat.total }}{% endif %}</td>
       </tr>
-      <tr data-stat="corners">
-        <td data-field="home">{{ state.home_corners }}</td><td>Rohy</td><td data-field="away">{{ state.away_corners }}</td>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card" data-testid="event-timeline">
+  <h3>Udalosti</h3>
+  <table>
+    <thead><tr><th>Minúta</th><th>Strana</th><th>Typ</th><th>Hráč</th></tr></thead>
+    <tbody>
+    {% for event in live_details.events %}
+      <tr data-testid="event-row">
+        <td>{{ event["minute"] }}{% if event["extra_minute"] %}+{{ event["extra_minute"] }}{% endif %}'</td>
+        <td>{{ event["team_side"] or "–" }}</td>
+        <td>{{ event["event_type"] or "–" }}</td>
+        <td>{{ event["player_name"] or "–" }}</td>
       </tr>
+    {% else %}
+      <tr><td colspan="4">Žiadne uložené udalosti.</td></tr>
+    {% endfor %}
     </tbody>
   </table>
 </div>

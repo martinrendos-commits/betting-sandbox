@@ -11,11 +11,21 @@ target, without touching anybody else's service.
 from __future__ import annotations
 
 import os
+import threading
+import time
 
 from flask import Blueprint, Flask, jsonify, render_template, request
 
 from . import simulator
-from .data import FIXTURES, FIXTURES_BY_ID, refresh_if_stale
+from .data import (
+    FIXTURES,
+    FIXTURES_BY_ID,
+    REMOTE_SOURCES,
+    refresh_if_stale,
+    refresh_live_data,
+    refresh_remote_data,
+)
+from .store import latest_match_events, latest_match_stats
 
 livescore = Blueprint("livescore", __name__, url_prefix="/livescore")
 bookmaker = Blueprint("bookmaker", __name__, url_prefix="/book")
@@ -25,6 +35,82 @@ def _rows(live_only: bool = False):
     refresh_if_stale()
     rows = [(fixture, simulator.state_of(fixture.match_id)) for fixture in FIXTURES]
     return [row for row in rows if row[1].is_live] if live_only else rows
+
+
+def _provider_match_id(match_id: str) -> str:
+    return match_id[1:] if match_id.startswith("m") and match_id[1:].isdigit() else match_id
+
+
+def _live_details(match_id: str, state):
+    stats = latest_match_stats(_provider_match_id(match_id))
+    events = latest_match_events(_provider_match_id(match_id))
+    if not stats:
+        return {
+            "source": "simulated",
+            "stats": [
+                {"metric": "shots", "label": "Strely", "home": state.home_shots, "away": state.away_shots, "total": None},
+                {"metric": "corners", "label": "Rohy", "home": state.home_corners, "away": state.away_corners, "total": None},
+            ],
+            "events": [],
+        }
+    return {
+        "source": "footballdata",
+        "stats": [
+            {
+                "metric": row["metric"],
+                "label": str(row["metric"]).replace("_", " ").capitalize(),
+                "home": row["home_value"],
+                "away": row["away_value"],
+                "total": row["total_value"],
+            }
+            for row in stats
+        ],
+        "events": events,
+    }
+
+
+def _start_refresh_worker(app: Flask) -> None:
+    source = os.environ.get("MOCK_FIXTURES", "synthetic")
+    if source not in REMOTE_SOURCES:
+        return
+    reloader_main = os.environ.get("WERKZEUG_RUN_MAIN")
+    if reloader_main is not None and reloader_main != "true":
+        return
+    if reloader_main is None and (app.debug or os.environ.get("FLASK_DEBUG") == "1"):
+        return
+    try:
+        schedule_interval = float(os.environ.get("MOCK_REFRESH_S", "600"))
+    except ValueError:
+        schedule_interval = 600.0
+    try:
+        live_interval = float(os.environ.get("MOCK_LIVE_REFRESH_S", "60"))
+    except ValueError:
+        live_interval = 60.0
+    stop_event = threading.Event()
+
+    def worker() -> None:
+        last_schedule = 0.0
+        last_live = 0.0
+        while not stop_event.is_set():
+            now = time.time()
+            if schedule_interval > 0 and now - last_schedule >= schedule_interval:
+                try:
+                    refresh_remote_data()
+                except Exception as exc:
+                    app.logger.warning("Obnovenie rozpisu workerom zlyhalo: %s", exc)
+                last_schedule = now
+            if live_interval > 0 and source == "footballdata" and now - last_live >= live_interval:
+                try:
+                    refresh_live_data()
+                except Exception as exc:
+                    app.logger.warning("Obnovenie live štatistík workerom zlyhalo: %s", exc)
+                last_live = now
+            stop_event.wait(1.0)
+
+    thread = threading.Thread(target=worker, name="mocksite-refresh", daemon=True)
+    thread.start()
+    app.extensions["mocksite_refresh_stop"] = stop_event
+    app.extensions["mocksite_refresh_thread"] = thread
 
 
 @livescore.get("/")
@@ -39,10 +125,12 @@ def match_list():
 @livescore.get("/match/<match_id>")
 def match_detail(match_id: str):
     fixture = FIXTURES_BY_ID[match_id]
+    state = simulator.state_of(match_id)
     return render_template(
         "livescore_detail.html",
         fixture=fixture,
-        state=simulator.state_of(match_id),
+        state=state,
+        live_details=_live_details(match_id, state),
     )
 
 
@@ -96,13 +184,21 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index():
+        rows = _rows()
+        live_rows = [row for row in rows if row[1].is_live]
+        upcoming_rows = [row for row in rows if row[1].status == simulator.SCHEDULED]
+        finished_rows = [row for row in rows if row[1].status == simulator.FINISHED]
+        finished_rows.sort(key=lambda row: row[0].kickoff_utc, reverse=True)
         return render_template(
             "index.html",
-            rows=_rows(),
+            live_rows=live_rows,
+            upcoming_rows=upcoming_rows,
+            finished_rows=finished_rows[:20],
             clock_mode=simulator.clock_mode(),
             source=os.environ.get("MOCK_FIXTURES", "synthetic"),
         )
 
+    _start_refresh_worker(app)
     return app
 
 

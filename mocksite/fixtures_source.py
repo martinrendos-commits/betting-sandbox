@@ -9,9 +9,9 @@ Four interchangeable providers:
   ``FOOTBALLDATA_API_KEY``); covers 1200+ leagues worldwide;
 * ``file``         – your own JSON file, so you can hand-write any fixture list.
 
-Only the *schedule, past results and team names* are real. Live minute-by-minute
-statistics and the bookmaker prices are still simulated locally: nothing in this
-project scrapes a live results portal or a bookmaker.
+Schedule, past results and available live statistics can come from footballdata.io.
+The bookmaker prices remain simulated locally: nothing in this project scrapes a
+live results portal or a bookmaker.
 """
 
 from __future__ import annotations
@@ -170,6 +170,16 @@ def load_openligadb(league: str, on_date: date, seasons_back: int = HISTORY_SEAS
             continue
         if isinstance(payload, list):
             all_matches.extend(payload)
+            try:
+                from .store import store_api_payload
+
+                store_api_payload(
+                    {"matches": payload},
+                    endpoint=f"getmatchdata/{league}/{season}",
+                    source="openliga",
+                )
+            except Exception as exc:
+                log.warning("Uloženie OpenLigaDB odpovede zlyhalo: %s", exc)
 
     if not all_matches:
         raise RuntimeError(f"OpenLigaDB nevrátilo žiadne zápasy pre ligu {league!r}")
@@ -272,7 +282,81 @@ def _footballdata_get(path: str, cache_key: str, max_age_s: float) -> dict:
     if not payload.get("success"):
         error = payload.get("error") or {}
         raise RuntimeError(f"footballdata.io: {error.get('message', 'neznáma chyba')}")
+    try:
+        from .store import store_api_payload
+
+        parts = path.split("?", 1)[0].split("/")
+        match_id = parts[1] if len(parts) >= 2 and parts[0] == "matches" and parts[1].isdigit() else None
+        store_api_payload(payload, endpoint=parts[0] if len(parts) == 1 else "/".join(parts), source="footballdata", match_id=match_id)
+    except Exception as exc:
+        log.warning("Uloženie footballdata odpovede zlyhalo: %s", exc)
     return payload["data"]
+
+
+def load_footballdata_results(limit: int = 100) -> int:
+    """Persist the provider's recent finished-result feed."""
+    data = _footballdata_get(
+        f"fixtures/results?limit={limit}",
+        cache_key="footballdata-results",
+        max_age_s=600,
+    )
+    matches = data.get("matches", [])
+    from .store import store_match_payloads
+
+    try:
+        return store_match_payloads(matches, source="footballdata")
+    except Exception as exc:
+        log.warning("Uloženie footballdata výsledkov zlyhalo: %s", exc)
+        return 0
+
+
+def load_footballdata_live(max_matches: int = 20) -> list[dict]:
+    """Fetch and persist currently live matches and their detailed stats."""
+    data = _footballdata_get(
+        f"fixtures/live?limit={max_matches}",
+        cache_key="footballdata-live",
+        max_age_s=45,
+    )
+    matches = list(data.get("matches", []))[:max_matches]
+    from .store import store_match_events, store_match_payloads, store_match_stats
+
+    try:
+        store_match_payloads(matches, source="footballdata")
+    except Exception as exc:
+        log.warning("Uloženie live zápasov zlyhalo: %s", exc)
+    for match in matches:
+        provider_id = str(match.get("match_id", ""))
+        if not provider_id:
+            continue
+        try:
+            stats_data = _footballdata_get(
+                f"matches/{provider_id}/stats",
+                cache_key=f"footballdata-stats-{provider_id}",
+                max_age_s=45,
+            )
+            store_match_stats(
+                provider_id,
+                stats_data.get("stats") or {},
+                source="footballdata",
+                endpoint=f"matches/{provider_id}/stats",
+            )
+        except Exception as exc:
+            log.warning("Live štatistiky zápasu %s nie sú dostupné: %s", provider_id, exc)
+        try:
+            events_data = _footballdata_get(
+                f"matches/{provider_id}/events",
+                cache_key=f"footballdata-events-{provider_id}",
+                max_age_s=45,
+            )
+            store_match_events(
+                provider_id,
+                events_data.get("events") or [],
+                source="footballdata",
+                endpoint=f"matches/{provider_id}/events",
+            )
+        except Exception as exc:
+            log.warning("Live udalosti zápasu %s nie sú dostupné: %s", provider_id, exc)
+    return matches
 
 
 def _footballdata_h2h(home_id: int, away_id: int, home: str, away: str) -> list[H2HMatch]:

@@ -73,6 +73,10 @@ def main(argv: list[str] | None = None) -> int:
     backfill.add_argument("--days", type=int, default=30)
     backfill.add_argument("--league", default="")
 
+    refresh = sub.add_parser("refresh", help="obnoví rozpis, výsledky a live štatistiky")
+    refresh.add_argument("--fixtures", choices=["footballdata", "openliga"], default="footballdata")
+    refresh.add_argument("--league", default="")
+
     ratings = sub.add_parser("ratings", help="vypíše Poisson ratingy z uložených výsledkov")
     ratings.add_argument("--league", default="")
     ratings.add_argument("--home-team", default="")
@@ -187,6 +191,21 @@ def main(argv: list[str] | None = None) -> int:
                 "SELECT COUNT(*) FROM matches WHERE source = ?", (args.fixtures,)
             ).fetchone()[0]
         print(f"Uložené do DB: {stored}; vhodné do rozvrhu spolu: {total}")
+        return 0
+
+    if args.command == "refresh":
+        os.environ["MOCK_FIXTURES"] = args.fixtures
+        if args.league:
+            os.environ["MOCK_LEAGUE"] = args.league
+        from mocksite.data import refresh_live_data, refresh_remote_data
+
+        try:
+            refresh_remote_data()
+            refresh_live_data()
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"Obnovenie zlyhalo: {exc}")
+            return 2
+        print("Rozpis, výsledky a dostupné live štatistiky boli obnovené.")
         return 0
 
     if args.command == "ratings":

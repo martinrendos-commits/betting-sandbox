@@ -54,8 +54,10 @@ pytest -q
 
 ## Rozpis zápasov: reálny alebo syntetický
 
-Rozpis (kto s kým a o koľkej) sa dá načítať z otvorených dát; **live štatistiky
-a všetky kurzy sú vždy simulované lokálne** – nescrapujú sa zo žiadnej kancelárie.
+Rozpis (kto s kým a o koľkej) sa dá načítať z otvorených dát. Pri
+`footballdata.io` sa dostupné live štatistiky zobrazujú s označením zdroja;
+ak provider štatistiky nemá, použijú sa označené lokálne simulácie. Kurzy sú
+vždy simulované lokálne – nescrapujú sa zo žiadnej kancelárie.
 
 ```bash
 # reálny rozpis z footballdata.io (vyžaduje API kľúč, viď nižšie)
@@ -76,7 +78,8 @@ python -m sandbox_bot fixtures --fixtures openliga --date 2026-08-28
 
 Prepínače majú aj ekvivalent v premenných prostredia: `MOCK_FIXTURES`,
 `MOCK_LEAGUE`, `MOCK_DATE`, `MOCK_CLOCK`, `MOCK_MINUTES_PER_SECOND`,
-`MOCK_REFRESH_S`. Stiahnuté odpovede sa cachujú do `.cache/`.
+`MOCK_REFRESH_S`, `MOCK_LIVE_REFRESH_S`. Stiahnuté odpovede sa cachujú do
+`.cache/`.
 
 ### footballdata.io
 
@@ -103,11 +106,17 @@ python -m sandbox_bot serve --fixtures footballdata --league 9   # alebo league_
 python -m sandbox_bot fixtures --fixtures footballdata --date 2026-08-13
 ```
 
-Z API sa berú len **názvy tímov, čas výkopu, súťaž, stav zápasu, prematch xG
-a H2H**; minútové live štatistiky aj kurzy si sandbox naďalej generuje sám.
+Z API sa ukladajú úplné odpovede, názvy tímov, čas výkopu, súťaž, stav zápasu,
+výsledok, skutočné aj prematch xG, dostupné live štatistiky a udalosti. Kurzy
+z API sa môžu uložiť na neskoršiu analýzu, ale bookmaker mock ich nikdy
+nepoužíva. Ak provider live štatistiky pre zápas nemá, UI zobrazí lokálne
+simulované hodnoty s jasným označením.
 Odpovede sú cachované (dnešný rozpis 2 min, H2H 24 h) a H2H sa ťahá najviac pre
-20 zápasov dňa, aby sa zbytočne nemíňal limit. Bežiaci server si rozpis sám
-obnoví každých `MOCK_REFRESH_S` sekúnd (default 300, `0` vypne).
+20 zápasov dňa, aby sa zbytočne nemíňal limit. Bežiaci server má background
+worker: rozpis a výsledky obnovuje každých `MOCK_REFRESH_S` sekúnd (default
+600) a live feed najviac každých `MOCK_LIVE_REFRESH_S` sekúnd (default 60).
+Nastavenie `0` príslušný refresh vypne. Live polling je obmedzený na 20
+zápasov v jednom cykle.
 Už odohrané / zrušené / odložené zápasy sa do rozpisu neberú.
 
 Ak Windows hlási `CERTIFICATE_VERIFY_FAILED`, aktualizuj závislosť:
@@ -156,6 +165,21 @@ Každý stiahnutý zápas z `footballdata.io` alebo OpenLigaDB sa priebežne ukl
 do SQLite databázy. Predvolená cesta je `data/sandbox.sqlite3`; inú cestu možno
 nastaviť premennou prostredia `MOCK_DB_PATH`. Zápisy sú zámerne nepovinné:
 problém so súborom alebo zámkom databázy nezhodí lokálny server.
+
+Schéma okrem základných tabuliek obsahuje `api_payloads` (úplný JSON každej
+úspešnej odpovede), `match_stats_snapshots` (história všetkých stat fields)
+a `match_events` (časová os udalostí). Existujúca databáza sa rozšíri
+automatickou aditívnou migráciou; netreba mazať `sandbox.sqlite3`.
+
+Index `/` zobrazuje tri stabilné sekcie: **Live**, **Budúce** a **Dohrané**.
+Detail live zápasu obsahuje všetky provider stat fields vrátane nulových alebo
+chýbajúcich hodnôt (chýbajúce sa zobrazia ako `–`) a uloženú časovú os udalostí.
+Označenie `dáta z footballdata.io` alebo `simulované` je súčasťou každého
+live štatistického bloku. Jednorazové obnovenie bez spustenia Flask servera:
+
+```bash
+python -m sandbox_bot refresh --fixtures footballdata
+```
 
 Na spätné stiahnutie posledných dní použite napríklad:
 
