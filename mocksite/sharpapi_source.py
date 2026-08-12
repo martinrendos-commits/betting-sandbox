@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import threading
@@ -166,7 +167,10 @@ def _request_with_id(
         raise SharpAPIError("SharpAPI je vypnuté: chýba SHARPAPI_API_KEY.", code="missing_api_key")
     query = urllib.parse.urlencode([(name, value) for name, value in (params or {}).items() if value is not None])
     url = f"{BASE_URL}/{endpoint}" + (f"?{query}" if query else "")
-    cache_key = "sharpapi-" + endpoint.replace("/", "-") + ("-" + query.replace("&", "_").replace("=", "-") if query else "")
+    cache_suffix = query.replace("&", "_").replace("=", "-") if query else ""
+    if len(cache_suffix) > 120:
+        cache_suffix = hashlib.sha256(query.encode("utf-8")).hexdigest()
+    cache_key = "sharpapi-" + endpoint.replace("/", "-") + ("-" + cache_suffix if cache_suffix else "")
     cache_file = _cache_dir() / f"{cache_key}.json"
     if method == "GET" and cache_file.exists() and time.time() - cache_file.stat().st_mtime < _cache_ttl(endpoint):
         return json.loads(cache_file.read_text(encoding="utf-8")), None
@@ -210,6 +214,40 @@ def _request(
 ) -> dict:
     payload, _ = _request_with_id(endpoint, method, params, body, persist)
     return payload
+
+
+def _page_cap() -> int:
+    try:
+        value = int(os.environ.get("SHARPAPI_PAGE_CAP", "3"))
+    except ValueError:
+        return 3
+    return max(1, min(value, 10))
+
+
+def _request_pages(
+    endpoint: str,
+    *,
+    params: dict[str, object],
+) -> list[tuple[dict, int | None]]:
+    pages: list[tuple[dict, int | None]] = []
+    page_params = dict(params)
+    for page_number in range(_page_cap()):
+        payload, payload_id = _request_with_id(endpoint, params=page_params)
+        pages.append((payload, payload_id))
+        pagination = payload.get("pagination")
+        if not isinstance(pagination, dict) or not pagination.get("has_more"):
+            break
+        next_cursor = pagination.get("next_cursor")
+        next_offset = pagination.get("next_offset")
+        if next_cursor:
+            page_params = {**params, "cursor": next_cursor}
+        elif next_offset is not None:
+            page_params = {**params, "offset": next_offset}
+        else:
+            break
+        if not sharpapi_request_available():
+            break
+    return pages
 
 
 def _get(endpoint: str, **params: object) -> dict:
@@ -470,8 +508,13 @@ def persist_normalized(payload: dict) -> tuple[int, int]:
 
 def refresh_for_fixtures(fixtures: list[object], *, limit: int = 10) -> tuple[int, int]:
     """Fetch soccer events and a bounded odds set for current fixtures."""
-    payload, events_payload_id = _request_with_id("events", params={"sport": "soccer", "limit": 200})
-    event_rows = normalize_events(payload)
+    event_pages = _request_pages("events", params={"sport": "soccer", "limit": 200})
+    event_rows: list[dict] = []
+    event_rows_by_payload: dict[int | None, list[dict]] = {}
+    for payload, payload_id in event_pages:
+        normalized = normalize_events(payload)
+        event_rows.extend(normalized)
+        event_rows_by_payload.setdefault(payload_id, []).extend(normalized)
     market_payload = markets()
     market_data = market_payload.get("data") or []
     market_types = {
@@ -490,9 +533,12 @@ def refresh_for_fixtures(fixtures: list[object], *, limit: int = 10) -> tuple[in
     main_params: dict[str, object] = {"sport": "soccer", "limit": 200}
     if main_market:
         main_params["market"] = main_market
-    odds_payloads = (
-        _request_with_id("odds", params=main_params),
-        _request_with_id("odds", params={"sport": "soccer", "is_live": True, "limit": 200}),
+    odds_payloads = _request_pages("odds", params=main_params)
+    odds_payloads.extend(
+        _request_pages(
+            "odds",
+            params={"sport": "soccer", "is_live": True, "limit": 200},
+        )
     )
     existing_event_ids = {str(event["id"]) for event in event_rows}
     for odds_payload, odds_payload_id in odds_payloads:
@@ -514,7 +560,8 @@ def refresh_for_fixtures(fixtures: list[object], *, limit: int = 10) -> tuple[in
                 }
             )
             existing_event_ids.add(row["event_id"])
-    store_sharp_events(event_rows, raw_payload_id=events_payload_id)
+    for payload_id, payload_rows in event_rows_by_payload.items():
+        store_sharp_events(payload_rows, raw_payload_id=payload_id)
     links = match_events_to_fixtures(event_rows, fixtures)
     for link in links:
         store_sharp_event_link(link["event_id"], link["match_id"], link["confidence"])

@@ -45,6 +45,30 @@ def test_sharpapi_request_uses_api_key_and_persists(monkeypatch, tmp_path):
         assert connection.execute("SELECT count(*) FROM api_payloads WHERE source='sharpapi'").fetchone()[0] == 1
 
 
+def test_sharpapi_pagination_follows_cursor_with_page_cap(monkeypatch):
+    requests = []
+    payloads = iter(
+        [
+            ({"data": [1], "pagination": {"has_more": True, "next_cursor": "abc"}}, 1),
+            ({"data": [2], "pagination": {"has_more": False}}, 2),
+        ]
+    )
+    monkeypatch.setattr(
+        sharpapi_source,
+        "_request_with_id",
+        lambda endpoint, params=None: requests.append((endpoint, params)) or next(payloads),
+    )
+    monkeypatch.setattr(sharpapi_source, "sharpapi_request_available", lambda: True)
+
+    pages = sharpapi_source._request_pages("events", params={"sport": "soccer", "limit": 200})
+
+    assert [payload["data"] for payload, _ in pages] == [[1], [2]]
+    assert requests == [
+        ("events", {"sport": "soccer", "limit": 200}),
+        ("events", {"sport": "soccer", "limit": 200, "cursor": "abc"}),
+    ]
+
+
 def test_sharpapi_missing_key_and_tier_errors(monkeypatch):
     monkeypatch.delenv("SHARPAPI_API_KEY", raising=False)
     monkeypatch.setattr(sharpapi_source, "load_env_file", lambda: {})
@@ -216,6 +240,7 @@ def test_index_shows_best_sharpapi_1x2_and_dash_when_absent(tmp_path, monkeypatc
     from mocksite import app as app_module, simulator
     from mocksite.data import FIXTURES
 
+    monkeypatch.setattr(app_module, "_start_refresh_worker", lambda app: None)
     live_state = simulator.state_of("m1")
     upcoming_state = replace(live_state, status=simulator.SCHEDULED)
     monkeypatch.setattr(
@@ -243,6 +268,7 @@ def test_index_shows_best_sharpapi_1x2_and_dash_when_absent(tmp_path, monkeypatc
     rows = re.findall(r'<tr data-testid="match-row".*?</tr>', body, flags=re.DOTALL)
     assert len(rows) == 2
     assert all(row.count("<td") == 5 for row in rows)
+    assert body.count('data-testid="match-link"') == 2
 
     monkeypatch.setenv("MOCK_DB_PATH", str(tmp_path / "empty.sqlite3"))
     body = create_app().test_client().get("/").get_data(as_text=True)
