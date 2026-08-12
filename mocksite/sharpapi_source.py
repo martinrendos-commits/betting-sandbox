@@ -461,8 +461,15 @@ def normalize_odds(payload: dict) -> list[dict]:
 
 def _norm_team(value: str) -> str:
     text = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode().casefold()
-    tokens = [token for token in text.replace("-", " ").split() if token not in {"fc", "afc", "sc", "cf", "mls"}]
-    tokens = ["saint" if token == "st" else token for token in tokens]
+    tokens = [
+        token
+        for token in text.replace("-", " ").split()
+        if token not in {"fc", "afc", "sc", "cf", "mls", "ca", "cd", "ud", "club"}
+    ]
+    tokens = [
+        "saint" if token == "st" else "atletico" if token == "atl" else token
+        for token in tokens
+    ]
     return " ".join(tokens)
 
 

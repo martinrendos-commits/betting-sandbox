@@ -145,6 +145,20 @@ def test_sharpapi_normalization_and_matching(tmp_path, monkeypatch):
         fixture.kickoff_utc,
     )
     assert sharpapi_source.match_events_to_fixtures([event], [wrong]) == []
+    alias_event = {
+        **event,
+        "home_team": "Atl Tucuman",
+        "away_team": "CA Independiente",
+    }
+    alias_fixture = Fixture(
+        "fd-3",
+        "Atlético Tucumán",
+        "Independiente",
+        fixture.kickoff_utc,
+    )
+    assert sharpapi_source.match_events_to_fixtures([alias_event], [alias_fixture]) == [
+        {"event_id": "sharp-1", "match_id": "fd-3", "confidence": 1.0}
+    ]
     assert store_sharp_events([event]) == 1
     assert store_sharp_odds(
         [{"event_id": "sharp-1", "sportsbook": "draftkings", "market_type": "moneyline", "selection": "MSK Zilina", "odds_decimal": 2.1}]
