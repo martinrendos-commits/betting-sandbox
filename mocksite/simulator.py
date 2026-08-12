@@ -163,6 +163,11 @@ def rebuild_timelines() -> None:
     TIMELINES.update({fixture.match_id: _build_timeline(fixture) for fixture in FIXTURES})
 
 
+def ensure_timeline(fixture: Fixture) -> None:
+    """Create local odds for a provider-live fixture not in today's schedule."""
+    TIMELINES[fixture.match_id] = _build_timeline(fixture)
+
+
 def _elapsed_minutes(fixture: Fixture, now: float | None = None) -> tuple[int, str]:
     """Current match minute and status for one fixture."""
     now = now or time.time()
@@ -192,13 +197,13 @@ def _elapsed_minutes(fixture: Fixture, now: float | None = None) -> tuple[int, s
 
 def state_of(match_id: str, minute: int | None = None) -> MinuteState:
     """State of a match now, or at an explicit minute (for tests/backtests)."""
-    from .data import FIXTURES_BY_ID
+    from .data import fixture_for_id
 
     timeline = TIMELINES[match_id]
     if minute is not None:
         return timeline[min(max(minute, 0), MATCH_MINUTES)]
 
-    current, status = _elapsed_minutes(FIXTURES_BY_ID[match_id])
+    current, status = _elapsed_minutes(fixture_for_id(match_id))
     base = timeline[current]
     if status == SCHEDULED:
         # Nothing has happened yet: show a clean 0-0 with no prices settled.

@@ -171,7 +171,9 @@ Schéma okrem základných tabuliek obsahuje `api_payloads` (úplný JSON každe
 a `match_events` (časová os udalostí). Existujúca databáza sa rozšíri
 automatickou aditívnou migráciou; netreba mazať `sandbox.sqlite3`.
 
-Index `/` zobrazuje tri stabilné sekcie: **Live**, **Budúce** a **Dohrané**.
+Index `/` zobrazuje stabilné sekcie **Live** a **Budúce**. Dohrané zápasy sa
+na stránke nezobrazujú, ale ich výsledky zostávajú uložené v SQLite pre spätné
+výpočty.
 Detail live zápasu obsahuje všetky provider stat fields vrátane nulových alebo
 chýbajúcich hodnôt (chýbajúce sa zobrazia ako `–`) a uloženú časovú os udalostí.
 Označenie `dáta z footballdata.io` alebo `simulované` je súčasťou každého

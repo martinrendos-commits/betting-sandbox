@@ -42,7 +42,6 @@
 </section>
 {%- endmacro %}
 
-{{ match_section("live-section", "Live", live_rows, "Momentálne sa nehrá žiadny zápas.") }}
+{{ match_section("live-section", "Live", live_rows, "Momentálne sa nehrá žiadny zápas z API. Na precvičenie použi MOCK_CLOCK=demo.") }}
 {{ match_section("upcoming-section", "Budúce", upcoming_rows, "Žiadne nadchádzajúce zápasy.") }}
-{{ match_section("finished-section", "Dohrané", finished_rows, "Žiadne dohrané zápasy.") }}
 {% endblock %}

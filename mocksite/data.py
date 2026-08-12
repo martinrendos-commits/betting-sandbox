@@ -44,6 +44,8 @@ def poisson_sample(rng: random.Random, lam: float) -> int:
 
 FIXTURES: list[Fixture] = []
 FIXTURES_BY_ID: dict[str, Fixture] = {}
+PROVIDER_LIVE_FIXTURES: dict[str, Fixture] = {}
+PROVIDER_LIVE_PAYLOADS: dict[str, dict] = {}
 _LAST_LOAD = 0.0
 _REFRESH_LOCK = threading.Lock()
 #: Providers whose schedule/status can change while the server runs.
@@ -107,10 +109,25 @@ def refresh_live_data() -> None:
     """Persist a bounded live feed and its detailed provider statistics."""
     if os.environ.get("MOCK_FIXTURES", "synthetic") != "footballdata":
         return
-    from .fixtures_source import load_footballdata_live
+    from .fixtures_source import _fixture_from_footballdata, load_footballdata_live
 
     with _REFRESH_LOCK:
-        load_footballdata_live()
+        matches = load_footballdata_live()
+        PROVIDER_LIVE_FIXTURES.clear()
+        PROVIDER_LIVE_PAYLOADS.clear()
+        from . import simulator
+
+        for match in matches:
+            fixture = _fixture_from_footballdata(match, with_h2h=False)
+            PROVIDER_LIVE_FIXTURES[fixture.match_id] = fixture
+            PROVIDER_LIVE_PAYLOADS[fixture.match_id] = match
+            simulator.ensure_timeline(fixture)
+
+
+def fixture_for_id(match_id: str) -> Fixture:
+    if match_id in FIXTURES_BY_ID:
+        return FIXTURES_BY_ID[match_id]
+    return PROVIDER_LIVE_FIXTURES[match_id]
 
 
 reload_fixtures()
@@ -119,10 +136,13 @@ reload_fixtures()
 __all__ = [
     "FIXTURES",
     "FIXTURES_BY_ID",
+    "PROVIDER_LIVE_FIXTURES",
+    "PROVIDER_LIVE_PAYLOADS",
     "Fixture",
     "H2HMatch",
     "SYNTHETIC_TEAMS",
     "poisson_sample",
     "refresh_if_stale",
     "reload_fixtures",
+    "fixture_for_id",
 ]
