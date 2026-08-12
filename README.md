@@ -301,6 +301,11 @@ class MyBookPage(BookmakerPage):
 
 ## Kam sa dá projekt posunúť legálne
 
+- vymeniť Poissona za bivariate Poisson / Dixon-Coles (korelácia gólov),
+- kalibrácia modelu (Brier score, log-loss) namiesto sledovania ROI na 4 zápasoch,
+- closing line value ako metrika kvality modelu,
+- napojenie na dáta, na ktoré máš licenciu alebo povolenie (open datasets, vlastný zber).
+
 ## SharpAPI kurzy
 
 SharpAPI je voliteľný druhý zdroj športových kurzov. Kľúč patrí do lokálneho
@@ -333,8 +338,3 @@ SharpAPI kurzy sú iba informačný externý zdroj. Kurz nášho mock bookmakeru
 tiket aj existujúci +EV tok zostávajú lokálne simulované. Porovnanie s
 lokálnym Poissonovým fair kurzom je označené ako analýza a nikdy nemení kurz
 ponúkaný sandbox bookmakerom.
-
-- vymeniť Poissona za bivariate Poisson / Dixon-Coles (korelácia gólov),
-- kalibrácia modelu (Brier score, log-loss) namiesto sledovania ROI na 4 zápasoch,
-- closing line value ako metrika kvality modelu,
-- napojenie na dáta, na ktoré máš licenciu alebo povolenie (open datasets, vlastný zber).

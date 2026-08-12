@@ -12,6 +12,7 @@ from mocksite.env_file import load_env_file
 from mocksite.store import connect
 
 from .config import SETTINGS
+from .ratings import fair_odds_for_fixture
 
 
 def _apply_source_env(args: argparse.Namespace) -> None:
@@ -146,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
             elif args.sharp_command == "best":
                 payload = sharpapi_source.odds_best(event_id=args.event)
             elif args.sharp_command in {"compare", "value"}:
-                payload = sharpapi_source.event_odds(args.event)
+                payload = sharpapi_source.odds(event_id=args.event, market="main", limit=200)
                 rows = sharpapi_source.normalize_odds(payload)
                 print("SharpAPI kurzy (informačný zdroj; nie mock bookmaker):")
                 for row in rows:
@@ -163,24 +164,26 @@ def main(argv: list[str] | None = None) -> int:
                     if link:
                         match_id = str(link[0])
                 if match_id:
-                    from mocksite.app import _local_fair_odds
                     from mocksite.data import fixture_for_id
 
-                    fair_rows = _local_fair_odds(fixture_for_id(match_id))
+                    fair_rows, used_fallback = fair_odds_for_fixture(fixture_for_id(match_id))
                     print("Lokálny Poisson fair kurz vs SharpAPI (analýza):")
+                    if used_fallback:
+                        print("Poznámka: pre tento zápas sa použil fallback pre riedke alebo chýbajúce ratingy.")
                     for fair in fair_rows:
                         prices = [
                             float(row["odds_decimal"])
                             for row in rows
-                            if row.get("market_type") == fair["market"]
-                            and row.get("selection") == fair["selection"]
+                            if row.get("market_concept") == fair["market"]
+                            and row.get("selection_key") == fair["selection"]
+                            and (fair["market"] != "over_under" or row.get("line") == 2.5)
                             and row.get("odds_decimal") is not None
                         ]
                         if prices:
                             best = max(prices)
                             edge = (best / fair["odds"] - 1) * 100
                             print(f"{fair['selection']}: fair {fair['odds']:.3f}, najlepší {best:.3f}, edge {edge:.1f}%")
-                elif args.sharp_command == "value":
+                else:
                     print("Zápas zatiaľ nie je spárovaný s lokálnym fixture; fair kurz nie je dostupný.")
                 return 0
             else:

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mocksite.store import connect
+from mocksite.fixtures_source import Fixture
 
 from .odds import poisson_pmf, probability_to_odds
 
@@ -47,6 +48,50 @@ class PairOdds:
     over_25: float
     under_25: float
     used_fallback: bool
+
+
+def _pair_from_lambdas(lambda_home: float, lambda_away: float, used_fallback: bool) -> PairOdds:
+    matrix = [
+        (poisson_pmf(h, lambda_home) * poisson_pmf(a, lambda_away), h, a)
+        for h in range(10)
+        for a in range(10)
+    ]
+    home_probability = sum(probability for probability, h, a in matrix if h > a)
+    draw_probability = sum(probability for probability, h, a in matrix if h == a)
+    away_probability = sum(probability for probability, h, a in matrix if h < a)
+    under_probability = sum(probability for probability, h, a in matrix if h + a <= 2)
+    return PairOdds(
+        lambda_home=lambda_home,
+        lambda_away=lambda_away,
+        home=probability_to_odds(home_probability),
+        draw=probability_to_odds(draw_probability),
+        away=probability_to_odds(away_probability),
+        over_25=probability_to_odds(1.0 - under_probability),
+        under_25=probability_to_odds(under_probability),
+        used_fallback=used_fallback,
+    )
+
+
+def fair_odds_for_fixture(
+    fixture: Fixture,
+    path: str | Path | None = None,
+) -> tuple[list[dict[str, object]], bool]:
+    """Return shared 1X2 and 2.5-goal fair prices for a fixture."""
+    rating = load_league_rating(fixture.competition, path) if fixture.competition else None
+    pair = pair_odds(rating, fixture.home, fixture.away) if rating else None
+    if pair is None:
+        pair = _pair_from_lambdas(
+            max((fixture.home_attack + fixture.away_defence) / 2, 0.1),
+            max((fixture.away_attack + fixture.home_defence) / 2, 0.1),
+            True,
+        )
+    return [
+        {"market": "1x2", "selection": "home", "odds": pair.home},
+        {"market": "1x2", "selection": "draw", "odds": pair.draw},
+        {"market": "1x2", "selection": "away", "odds": pair.away},
+        {"market": "over_under", "selection": "over_2_5", "odds": pair.over_25},
+        {"market": "over_under", "selection": "under_2_5", "odds": pair.under_25},
+    ], pair.used_fallback
 
 
 def _league_id(connection: sqlite3.Connection, value: str) -> str | None:
@@ -143,22 +188,4 @@ def pair_odds(
     else:
         lam_home = rating.average_home_goals * home.home_attack * away.away_defence
         lam_away = rating.average_away_goals * away.away_attack * home.home_defence
-    matrix = [
-        (poisson_pmf(h, lam_home) * poisson_pmf(a, lam_away), h, a)
-        for h in range(10)
-        for a in range(10)
-    ]
-    home_probability = sum(probability for probability, h, a in matrix if h > a)
-    draw_probability = sum(probability for probability, h, a in matrix if h == a)
-    away_probability = sum(probability for probability, h, a in matrix if h < a)
-    under_probability = sum(probability for probability, h, a in matrix if h + a <= 2)
-    return PairOdds(
-        lambda_home=lam_home,
-        lambda_away=lam_away,
-        home=probability_to_odds(home_probability),
-        draw=probability_to_odds(draw_probability),
-        away=probability_to_odds(away_probability),
-        over_25=probability_to_odds(1.0 - under_probability),
-        under_25=probability_to_odds(under_probability),
-        used_fallback=used_fallback,
-    )
+    return _pair_from_lambdas(lam_home, lam_away, used_fallback)

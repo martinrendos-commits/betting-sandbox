@@ -15,6 +15,7 @@ import threading
 import time
 
 from flask import Blueprint, Flask, jsonify, render_template, request
+from sandbox_bot.ratings import fair_odds_for_fixture
 
 from . import simulator
 from .data import (
@@ -29,6 +30,7 @@ from .data import (
     refresh_remote_data,
 )
 from .store import latest_match_events, latest_match_stats, latest_sharp_odds, sharp_event_id_for_match
+from .sharpapi_source import SharpAPIError, refresh_for_fixtures, sharpapi_enabled, sharpapi_status
 
 livescore = Blueprint("livescore", __name__, url_prefix="/livescore")
 bookmaker = Blueprint("bookmaker", __name__, url_prefix="/book")
@@ -143,48 +145,30 @@ def _live_details(match_id: str, state):
     }
 
 
-def _sharp_odds_details(match_id: str, fixture):
+def _sharp_odds_details(match_id: str):
     event_id = sharp_event_id_for_match(match_id)
     odds = latest_sharp_odds(event_id) if event_id else []
     if not odds:
         return {"source": "footballdata", "rows": [], "event_id": None}
-    return {"source": "sharpapi", "rows": odds, "event_id": event_id}
-
-
-def _local_fair_odds(fixture) -> list[dict]:
-    import math
-
-    lam_home = max((fixture.home_attack + fixture.away_defence) / 2, 0.1)
-    lam_away = max((fixture.away_attack + fixture.home_defence) / 2, 0.1)
-    under = 0.0
-    home_win = draw = away_win = 0.0
-    for home in range(10):
-        for away in range(10):
-            probability = (
-                math.exp(-lam_home) * lam_home**home / math.factorial(home)
-                * math.exp(-lam_away) * lam_away**away / math.factorial(away)
-            )
-            if home + away <= 2:
-                under += probability
-            if home > away:
-                home_win += probability
-            elif home == away:
-                draw += probability
-            else:
-                away_win += probability
-    return [
-        {"market": "1x2", "selection": "home", "odds": round(1 / max(home_win, 0.001), 3)},
-        {"market": "1x2", "selection": "draw", "odds": round(1 / max(draw, 0.001), 3)},
-        {"market": "1x2", "selection": "away", "odds": round(1 / max(away_win, 0.001), 3)},
-        {"market": "over_under", "selection": "over_2_5", "odds": round(1 / max(1 - under, 0.001), 3)},
-        {"market": "over_under", "selection": "under_2_5", "odds": round(1 / max(under, 0.001), 3)},
-    ]
+    normalized = []
+    for row in odds:
+        market_type = str(row.get("market_type") or "").casefold()
+        selection = str(row.get("selection") or "").casefold()
+        market_concept = row.get("market_concept") or {
+            "moneyline": "1x2",
+            "total_goals": "over_under",
+        }.get(market_type)
+        selection_key = row.get("selection_key") or selection
+        normalized.append({**row, "market_concept": market_concept, "selection_key": selection_key})
+    main = [row for row in normalized if not row.get("is_player_prop") and row.get("market_concept") in {"1x2", "over_under", "double_chance"}]
+    priority = {"1x2": 0, "over_under": 1, "double_chance": 2}
+    main.sort(key=lambda row: (priority.get(str(row.get("market_concept")), 9), str(row.get("market_type")), str(row.get("sportsbook"))))
+    other_count = len(odds) - len(main)
+    return {"source": "sharpapi", "rows": main, "stored_count": len(odds), "other_count": other_count, "event_id": event_id}
 
 
 def _start_refresh_worker(app: Flask) -> None:
     source = os.environ.get("MOCK_FIXTURES", "synthetic")
-    from .sharpapi_source import sharpapi_enabled
-
     if source not in REMOTE_SOURCES and not sharpapi_enabled():
         return
     reloader_main = os.environ.get("WERKZEUG_RUN_MAIN")
@@ -227,8 +211,6 @@ def _start_refresh_worker(app: Flask) -> None:
                 last_live = now
             if sharp_interval > 0 and now - last_sharp >= sharp_interval:
                 try:
-                    from .sharpapi_source import SharpAPIError, refresh_for_fixtures, sharpapi_enabled, sharpapi_status
-
                     if sharpapi_enabled():
                         refresh_for_fixtures(FIXTURES + list(PROVIDER_UPCOMING_FIXTURES.values()))
                     elif not sharp_logged:
@@ -262,13 +244,15 @@ def match_detail(match_id: str):
     state = simulator.state_of(match_id)
     if match_id in PROVIDER_LIVE_FIXTURES:
         state = _provider_state(match_id, state)
+    fair_odds, fair_odds_fallback = fair_odds_for_fixture(fixture)
     return render_template(
         "livescore_detail.html",
         fixture=fixture,
         state=state,
         live_details=_live_details(match_id, state),
-        sharp_odds=_sharp_odds_details(match_id, fixture),
-        local_fair_odds=_local_fair_odds(fixture),
+        sharp_odds=_sharp_odds_details(match_id),
+        local_fair_odds=fair_odds,
+        fair_odds_fallback=fair_odds_fallback,
     )
 
 

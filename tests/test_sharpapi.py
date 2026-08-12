@@ -11,6 +11,7 @@ from mocksite.store import connect, latest_sharp_odds, store_sharp_events, store
 
 def test_sharpapi_request_uses_api_key_and_persists(monkeypatch, tmp_path):
     monkeypatch.setenv("SHARPAPI_API_KEY", "test-key")
+    monkeypatch.setenv("SHARPAPI_DISABLED", "true")
     monkeypatch.setenv("MOCK_DB_PATH", str(tmp_path / "sharp.sqlite3"))
     monkeypatch.setenv("MOCK_CACHE_DIR", str(tmp_path / "cache"))
     sharpapi_source._REQUEST_TIMES.clear()

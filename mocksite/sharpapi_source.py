@@ -11,6 +11,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,7 +29,6 @@ _REQUEST_TIMES: list[float] = []
 _ACCOUNT_LOCK = threading.Lock()
 _ACCOUNT: dict | None = None
 _SERVER_LIMIT: int | None = None
-_LAST_PAYLOAD_ID: int | None = None
 _DISABLED_LOGGED = False
 
 
@@ -106,11 +106,9 @@ def _account_limit() -> int:
     return DEFAULT_RPM
 
 
-def _update_limit(headers: object) -> None:
+def _update_limit(headers: Mapping[str, str]) -> None:
     global _SERVER_LIMIT
-    if headers is None:
-        return
-    value = headers.get("X-RateLimit-Limit") if hasattr(headers, "get") else None
+    value = headers.get("X-RateLimit-Limit")
     try:
         parsed = int(str(value))
     except (TypeError, ValueError):
@@ -149,7 +147,13 @@ def _account_info() -> dict:
     return _ACCOUNT or {}
 
 
-def _request(endpoint: str, method: str = "GET", params: dict[str, object] | None = None, body: dict | None = None, persist: bool = True) -> dict:
+def _request_with_id(
+    endpoint: str,
+    method: str = "GET",
+    params: dict[str, object] | None = None,
+    body: dict | None = None,
+    persist: bool = True,
+) -> tuple[dict, int | None]:
     key = sharpapi_key()
     if not key:
         raise SharpAPIError("SharpAPI je vypnuté: chýba SHARPAPI_API_KEY.", code="missing_api_key")
@@ -158,7 +162,7 @@ def _request(endpoint: str, method: str = "GET", params: dict[str, object] | Non
     cache_key = "sharpapi-" + endpoint.replace("/", "-") + ("-" + query.replace("&", "_").replace("=", "-") if query else "")
     cache_file = _cache_dir() / f"{cache_key}.json"
     if method == "GET" and cache_file.exists() and time.time() - cache_file.stat().st_mtime < _cache_ttl(endpoint):
-        return json.loads(cache_file.read_text(encoding="utf-8"))
+        return json.loads(cache_file.read_text(encoding="utf-8")), None
     attempts = 0
     while True:
         _wait_for_rate_limit()
@@ -186,10 +190,19 @@ def _request(endpoint: str, method: str = "GET", params: dict[str, object] | Non
             raise SharpAPIError(f"SharpAPI sa nedá načítať: {error}") from error
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        if persist:
-            global _LAST_PAYLOAD_ID
-            _LAST_PAYLOAD_ID = store_api_payload(payload, endpoint=endpoint, source="sharpapi")
-        return payload
+        payload_id = store_api_payload(payload, endpoint=endpoint, source="sharpapi") if persist else None
+        return payload, payload_id
+
+
+def _request(
+    endpoint: str,
+    method: str = "GET",
+    params: dict[str, object] | None = None,
+    body: dict | None = None,
+    persist: bool = True,
+) -> dict:
+    payload, _ = _request_with_id(endpoint, method, params, body, persist)
+    return payload
 
 
 def _get(endpoint: str, **params: object) -> dict:
@@ -234,18 +247,6 @@ def injuries(**params: object) -> dict:
 
 def account_keys() -> dict:
     return _get("account/keys")
-
-
-def create_account_key(body: dict) -> dict:
-    return _request("account/keys", "POST", body=body)
-
-
-def delete_account_key(key_id: str) -> dict:
-    return _request(f"account/keys/{urllib.parse.quote(key_id, safe='')}", "DELETE")
-
-
-def rotate_account_key(key_id: str) -> dict:
-    return _request(f"account/keys/{urllib.parse.quote(key_id, safe='')}/rotate", "POST")
 
 
 def events(**params: object) -> dict:
@@ -462,8 +463,7 @@ def persist_normalized(payload: dict) -> tuple[int, int]:
 
 def refresh_for_fixtures(fixtures: list[object], *, limit: int = 10) -> tuple[int, int]:
     """Fetch soccer events and a bounded odds set for current fixtures."""
-    payload = events(sport="soccer", limit=200)
-    events_payload_id = _LAST_PAYLOAD_ID
+    payload, events_payload_id = _request_with_id("events", params={"sport": "soccer", "limit": 200})
     event_rows = normalize_events(payload)
     market_payload = markets()
     market_data = market_payload.get("data") or []
@@ -479,19 +479,20 @@ def refresh_for_fixtures(fixtures: list[object], *, limit: int = 10) -> tuple[in
         main_market = "total_goals"
     else:
         main_market = None
-    odds_rows: list[dict] = []
+    odds_rows: list[tuple[dict, int | None]] = []
     main_params: dict[str, object] = {"sport": "soccer", "limit": 200}
     if main_market:
         main_params["market"] = main_market
-    for odds_payload in (
-        odds(**main_params),
-        odds(sport="soccer", is_live=True, limit=200),
-    ):
-        odds_payload_id = _LAST_PAYLOAD_ID
+    odds_payloads = (
+        _request_with_id("odds", params=main_params),
+        _request_with_id("odds", params={"sport": "soccer", "is_live": True, "limit": 200}),
+    )
+    existing_event_ids = {str(event["id"]) for event in event_rows}
+    for odds_payload, odds_payload_id in odds_payloads:
         normalized = normalize_odds(odds_payload)
-        odds_rows.extend(normalized)
+        odds_rows.extend((row, odds_payload_id) for row in normalized)
         for row in normalized:
-            if not row.get("home_team") or not row.get("away_team") or row["event_id"] in {str(event["id"]) for event in event_rows}:
+            if not row.get("home_team") or not row.get("away_team") or row["event_id"] in existing_event_ids:
                 continue
             event_rows.append(
                 {
@@ -505,11 +506,14 @@ def refresh_for_fixtures(fixtures: list[object], *, limit: int = 10) -> tuple[in
                     "is_live": row.get("is_live"),
                 }
             )
+            existing_event_ids.add(row["event_id"])
     store_sharp_events(event_rows, raw_payload_id=events_payload_id)
     links = match_events_to_fixtures(event_rows, fixtures)
     for link in links:
         store_sharp_event_link(link["event_id"], link["match_id"], link["confidence"])
     linked_ids = {str(link["event_id"]) for link in links}
-    stored_odds = [row for row in odds_rows if row["event_id"] in linked_ids]
-    odds_count = store_sharp_odds(stored_odds, raw_payload_id=_LAST_PAYLOAD_ID)
+    odds_count = 0
+    for payload_id in {payload_id for row, payload_id in odds_rows if row["event_id"] in linked_ids}:
+        payload_rows = [row for row, row_payload_id in odds_rows if row["event_id"] in linked_ids and row_payload_id == payload_id]
+        odds_count += store_sharp_odds(payload_rows, raw_payload_id=payload_id)
     return len(event_rows), odds_count

@@ -40,6 +40,7 @@
   <h3>Kurzy a analýza</h3>
   {% if sharp_odds.rows %}
   <p class="muted">Zdroj kurzov: SharpAPI (športovky podľa bookmakerov).</p>
+  {% if sharp_odds.other_count %}<p class="muted">Ďalších {{ sharp_odds.other_count }} uložených kurzov (props/ostatné trhy) je skrytých.</p>{% endif %}
   <table data-testid="sharp-odds">
     <thead><tr><th>Bookmaker</th><th>Trh</th><th>Výber</th><th>Kurz</th></tr></thead>
     <tbody>
@@ -54,7 +55,7 @@
   {% else %}
   <p class="muted">Zdroj kurzov: footballdata.io (SharpAPI kurzy nie sú pre tento zápas uložené).</p>
   {% endif %}
-  <p class="muted">Lokálny Poisson fair kurz (analýza, nie kurz sandbox bookmakeru):</p>
+  <p class="muted">Lokálny Poisson fair kurz (analýza, nie kurz sandbox bookmakeru){% if fair_odds_fallback %}; použitý ligový/fixture fallback{% endif %}:</p>
   <table data-testid="fair-odds">
     <thead><tr><th>Trh</th><th>Výber</th><th>Fair kurz</th><th>Najlepší SharpAPI</th><th>Edge</th></tr></thead>
     <tbody>
