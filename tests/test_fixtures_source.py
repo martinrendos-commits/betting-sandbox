@@ -1,9 +1,10 @@
 import json
+import os
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from mocksite import fixtures_source, simulator
+from mocksite import env_file, fixtures_source, simulator
 from mocksite.data import reload_fixtures
 from mocksite.fixtures_source import load_fixtures, load_json_file, load_synthetic
 
@@ -128,10 +129,28 @@ def test_footballdata_league_filter_accepts_id_or_name(footballdata_api):
     assert fixtures_source.load_footballdata(date(2026, 8, 13), "Bundesliga") == []
 
 
-def test_footballdata_requires_api_key(monkeypatch):
+def test_footballdata_requires_api_key(monkeypatch, tmp_path):
     monkeypatch.delenv("FOOTBALLDATA_API_KEY", raising=False)
+    monkeypatch.setattr(fixtures_source, "ENV_FILE", tmp_path / "missing.env")
+    monkeypatch.setattr(env_file, "ENV_FILE", tmp_path / "missing.env")
     with pytest.raises(RuntimeError, match="FOOTBALLDATA_API_KEY"):
         fixtures_source.load_footballdata(date(2026, 8, 13))
+
+
+def test_env_file_fills_missing_key_but_never_overrides(monkeypatch, tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        '# komentár\nFOOTBALLDATA_API_KEY="fd_from_file"\nMOCK_CLOCK=demo\n',
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("FOOTBALLDATA_API_KEY", raising=False)
+    monkeypatch.setenv("MOCK_CLOCK", "real")
+
+    applied = env_file.load_env_file(env_path)
+
+    assert applied == {"FOOTBALLDATA_API_KEY": "fd_from_file"}
+    assert os.environ["FOOTBALLDATA_API_KEY"] == "fd_from_file"
+    assert os.environ["MOCK_CLOCK"] == "real"
 
 
 def test_provider_status_keeps_finished_match_out_of_the_live_offer(monkeypatch):

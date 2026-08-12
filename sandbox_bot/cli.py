@@ -7,6 +7,8 @@ import logging
 import os
 from datetime import date
 
+from mocksite.env_file import load_env_file
+
 from .config import SETTINGS
 
 
@@ -21,6 +23,7 @@ def _apply_source_env(args: argparse.Namespace) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_env_file()  # before argparse: the defaults below read the environment
     parser = argparse.ArgumentParser(prog="sandbox_bot", description="Local betting sandbox bot")
     parser.add_argument("--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -75,14 +78,24 @@ def main(argv: list[str] | None = None) -> int:
         _apply_source_env(args)
 
     if args.command == "serve":
-        from mocksite.app import create_app
+        try:
+            from mocksite.app import create_app
+        except RuntimeError as exc:  # missing key, dead API, unusable source
+            print(f"\nRozpis sa nepodarilo načítať:\n{exc}\n")
+            return 2
 
         create_app().run(host="127.0.0.1", port=args.port)
         return 0
 
     if args.command == "fixtures":
         from mocksite import simulator
-        from mocksite.data import FIXTURES
+
+        try:
+            from mocksite.data import FIXTURES
+        except RuntimeError as exc:
+            print(f"\nRozpis sa nepodarilo načítať:\n{exc}\n")
+            return 2
+
         from mocksite.fixtures_source import footballdata_matchdays, next_matchdays
 
         if not FIXTURES:

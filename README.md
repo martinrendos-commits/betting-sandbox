@@ -80,7 +80,14 @@ Prepínače majú aj ekvivalent v premenných prostredia: `MOCK_FIXTURES`,
 
 ### footballdata.io
 
-Kľúč sa **nikdy nepíše do kódu** – načíta sa z premennej prostredia:
+Kľúč sa **nikdy nepíše do kódu**. Najpohodlnejšie je skopírovať `.env.example`
+na `.env` v koreni projektu (je v `.gitignore`) a doplniť riadok:
+
+```
+FOOTBALLDATA_API_KEY=fd_...
+```
+
+Alternatívne premenná prostredia, ktorá má vždy prednosť pred `.env`:
 
 ```powershell
 # Windows PowerShell

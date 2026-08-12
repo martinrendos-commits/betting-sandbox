@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from .env_file import ENV_FILE, load_env_file
+
 log = logging.getLogger("mocksite.fixtures")
 
 CACHE_DIR = Path(os.environ.get("MOCK_CACHE_DIR", Path(__file__).resolve().parent.parent / ".cache"))
@@ -218,8 +220,15 @@ FD_DEAD_STATUSES = frozenset({"complete", "canceled", "cancelled", "postponed", 
 def footballdata_key() -> str:
     key = os.environ.get("FOOTBALLDATA_API_KEY", "").strip()
     if not key:
+        load_env_file()
+        key = os.environ.get("FOOTBALLDATA_API_KEY", "").strip()
+    if not key:
         raise RuntimeError(
-            "Chýba FOOTBALLDATA_API_KEY – nastav premennú prostredia s kľúčom z footballdata.io"
+            "Chýba FOOTBALLDATA_API_KEY. Buď ho nastav v aktuálnom okne\n"
+            '  PowerShell:  $env:FOOTBALLDATA_API_KEY = "fd_..."\n'
+            "  bash:        export FOOTBALLDATA_API_KEY=fd_...\n"
+            f"alebo ho zapíš do súboru {ENV_FILE} ako riadok\n"
+            "  FOOTBALLDATA_API_KEY=fd_..."
         )
     return key
 
