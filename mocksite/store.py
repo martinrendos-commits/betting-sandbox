@@ -115,10 +115,47 @@ def create_schema(connection: sqlite3.Connection) -> None:
             raw_json TEXT NOT NULL,
             FOREIGN KEY (match_id) REFERENCES matches(match_id)
         );
+        CREATE TABLE IF NOT EXISTS sharp_events (
+            event_id TEXT PRIMARY KEY,
+            uuid TEXT,
+            sport TEXT,
+            league TEXT,
+            home_team TEXT NOT NULL,
+            away_team TEXT NOT NULL,
+            start_time TEXT,
+            status TEXT,
+            is_live INTEGER,
+            book_count INTEGER,
+            market_count INTEGER,
+            fetched_at TEXT NOT NULL,
+            raw_payload_id INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS sharp_odds_snapshots (
+            snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT NOT NULL,
+            sportsbook TEXT NOT NULL,
+            market_type TEXT NOT NULL,
+            selection TEXT,
+            odds_decimal REAL,
+            odds_american REAL,
+            odds_probability REAL,
+            is_live INTEGER,
+            timestamp TEXT,
+            fetched_at TEXT NOT NULL,
+            raw_payload_id INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS sharp_event_links (
+            event_id TEXT PRIMARY KEY,
+            match_id TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            matched_at TEXT NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS matches_league_idx ON matches(league_id);
         CREATE INDEX IF NOT EXISTS api_payloads_match_idx ON api_payloads(match_id);
         CREATE INDEX IF NOT EXISTS stats_match_idx ON match_stats_snapshots(match_id, fetched_at);
         CREATE INDEX IF NOT EXISTS events_match_idx ON match_events(match_id, fetched_at);
+        CREATE INDEX IF NOT EXISTS sharp_odds_event_idx ON sharp_odds_snapshots(event_id, fetched_at);
+        CREATE INDEX IF NOT EXISTS sharp_links_match_idx ON sharp_event_links(match_id);
         """
     )
     _add_columns(
@@ -320,17 +357,111 @@ def store_api_payload(
     source: str,
     match_id: str | None = None,
     path: str | Path | None = None,
-) -> None:
+) -> int:
     """Persist a successful provider response as JSON."""
     fetched_at = datetime.now(timezone.utc).isoformat()
 
-    def write(connection: sqlite3.Connection) -> None:
-        connection.execute(
+    def write(connection: sqlite3.Connection) -> int:
+        cursor = connection.execute(
             "INSERT INTO api_payloads(endpoint, match_id, fetched_at, source, payload_json) VALUES (?, ?, ?, ?, ?)",
             (endpoint, match_id, fetched_at, source, json.dumps(payload, ensure_ascii=False, sort_keys=True)),
         )
+        return int(cursor.lastrowid)
+
+    return int(_run_write(write, path))
+
+
+def store_sharp_events(events: list[dict], *, raw_payload_id: int | None = None, path: str | Path | None = None) -> int:
+    """Persist normalized SharpAPI event rows."""
+    fetched_at = datetime.now(timezone.utc).isoformat()
+
+    def write(connection: sqlite3.Connection) -> int:
+        stored = 0
+        for event in events:
+            event_id = _text(event.get("id"))
+            home = _text(event.get("home_team"))
+            away = _text(event.get("away_team"))
+            if not event_id or not home or not away:
+                continue
+            connection.execute(
+                "INSERT INTO sharp_events(event_id, uuid, sport, league, home_team, away_team, start_time, "
+                "status, is_live, book_count, market_count, fetched_at, raw_payload_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(event_id) DO UPDATE SET uuid=excluded.uuid, sport=excluded.sport, league=excluded.league, "
+                "home_team=excluded.home_team, away_team=excluded.away_team, start_time=excluded.start_time, status=excluded.status, "
+                "is_live=excluded.is_live, book_count=excluded.book_count, market_count=excluded.market_count, fetched_at=excluded.fetched_at, "
+                "raw_payload_id=excluded.raw_payload_id",
+                (event_id, _text(event.get("uuid")), _text(event.get("sport")), _text(event.get("league")), home, away,
+                 _text(event.get("start_time")), _text(event.get("status")), int(bool(event.get("is_live"))),
+                 _number(event.get("book_count")), _number(event.get("market_count")), fetched_at, raw_payload_id),
+            )
+            stored += 1
+        return stored
+
+    return int(_run_write(write, path))
+
+
+def store_sharp_odds(
+    odds: list[dict], *, raw_payload_id: int | None = None, path: str | Path | None = None
+) -> int:
+    """Persist normalized SharpAPI sportsbook odds rows."""
+    fetched_at = datetime.now(timezone.utc).isoformat()
+
+    def write(connection: sqlite3.Connection) -> int:
+        for row in odds:
+            connection.execute(
+                "INSERT INTO sharp_odds_snapshots(event_id, sportsbook, market_type, selection, odds_decimal, "
+                "odds_american, odds_probability, is_live, timestamp, fetched_at, raw_payload_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (_text(row.get("event_id")) or "", _text(row.get("sportsbook")) or "",
+                 _text(row.get("market_type")) or "", _text(row.get("selection")),
+                 row.get("odds_decimal"), row.get("odds_american"), row.get("odds_probability"),
+                 int(bool(row.get("is_live"))), _text(row.get("timestamp")), fetched_at, raw_payload_id),
+            )
+        return len(odds)
+
+    return int(_run_write(write, path))
+
+
+def store_sharp_event_link(event_id: str, match_id: str, confidence: float, *, path: str | Path | None = None) -> None:
+    matched_at = datetime.now(timezone.utc).isoformat()
+
+    def write(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "INSERT INTO sharp_event_links(event_id, match_id, confidence, matched_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(event_id) DO UPDATE SET match_id=excluded.match_id, confidence=excluded.confidence, matched_at=excluded.matched_at",
+            (event_id, match_id, confidence, matched_at),
+        )
 
     _run_write(write, path)
+
+
+def latest_sharp_odds(event_id: str | None = None) -> list[dict]:
+    with connect() as connection:
+        if event_id is None:
+            rows = connection.execute(
+                "SELECT event_id, sportsbook, market_type, selection, odds_decimal, odds_american, odds_probability, "
+                "is_live, timestamp FROM sharp_odds_snapshots WHERE fetched_at = (SELECT max(fetched_at) FROM sharp_odds_snapshots)"
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT event_id, sportsbook, market_type, selection, odds_decimal, odds_american, odds_probability, "
+                "is_live, timestamp FROM sharp_odds_snapshots WHERE event_id=? AND fetched_at = "
+                "(SELECT max(current.fetched_at) FROM sharp_odds_snapshots AS current WHERE current.event_id=?) "
+                "ORDER BY sportsbook, market_type, selection",
+                (event_id, event_id),
+            ).fetchall()
+    keys = ("event_id", "sportsbook", "market_type", "selection", "odds_decimal", "odds_american",
+            "odds_probability", "is_live", "timestamp")
+    return [dict(zip(keys, row)) for row in rows]
+
+
+def sharp_event_id_for_match(match_id: str) -> str | None:
+    with connect() as connection:
+        row = connection.execute(
+            "SELECT event_id FROM sharp_event_links WHERE match_id=? ORDER BY matched_at DESC LIMIT 1",
+            (match_id,),
+        ).fetchone()
+    return str(row[0]) if row else None
 
 
 def store_match_stats(

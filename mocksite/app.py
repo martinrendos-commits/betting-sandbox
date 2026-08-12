@@ -28,7 +28,7 @@ from .data import (
     refresh_live_data,
     refresh_remote_data,
 )
-from .store import latest_match_events, latest_match_stats
+from .store import latest_match_events, latest_match_stats, latest_sharp_odds, sharp_event_id_for_match
 
 livescore = Blueprint("livescore", __name__, url_prefix="/livescore")
 bookmaker = Blueprint("bookmaker", __name__, url_prefix="/book")
@@ -143,9 +143,39 @@ def _live_details(match_id: str, state):
     }
 
 
+def _sharp_odds_details(match_id: str, fixture):
+    event_id = sharp_event_id_for_match(match_id)
+    odds = latest_sharp_odds(event_id) if event_id else []
+    if not odds:
+        return {"source": "footballdata", "rows": [], "event_id": None}
+    return {"source": "sharpapi", "rows": odds, "event_id": event_id}
+
+
+def _local_fair_odds(fixture) -> list[dict]:
+    import math
+
+    lam_home = max((fixture.home_attack + fixture.away_defence) / 2, 0.1)
+    lam_away = max((fixture.away_attack + fixture.home_defence) / 2, 0.1)
+    under = 0.0
+    for home in range(10):
+        for away in range(10):
+            probability = (
+                math.exp(-lam_home) * lam_home**home / math.factorial(home)
+                * math.exp(-lam_away) * lam_away**away / math.factorial(away)
+            )
+            if home + away <= 2:
+                under += probability
+    return [
+        {"market": "total_goals", "selection": "over_2_5", "odds": round(1 / max(1 - under, 0.001), 3)},
+        {"market": "total_goals", "selection": "under_2_5", "odds": round(1 / max(under, 0.001), 3)},
+    ]
+
+
 def _start_refresh_worker(app: Flask) -> None:
     source = os.environ.get("MOCK_FIXTURES", "synthetic")
-    if source not in REMOTE_SOURCES:
+    from .sharpapi_source import sharpapi_enabled
+
+    if source not in REMOTE_SOURCES and not sharpapi_enabled():
         return
     reloader_main = os.environ.get("WERKZEUG_RUN_MAIN")
     if reloader_main is not None and reloader_main != "true":
@@ -160,11 +190,17 @@ def _start_refresh_worker(app: Flask) -> None:
         live_interval = float(os.environ.get("MOCK_LIVE_REFRESH_S", "60"))
     except ValueError:
         live_interval = 60.0
+    try:
+        sharp_interval = float(os.environ.get("SHARPAPI_REFRESH_S", "60"))
+    except ValueError:
+        sharp_interval = 60.0
     stop_event = threading.Event()
 
     def worker() -> None:
         last_schedule = 0.0
         last_live = 0.0
+        last_sharp = 0.0
+        sharp_logged = False
         while not stop_event.is_set():
             now = time.time()
             if schedule_interval > 0 and now - last_schedule >= schedule_interval:
@@ -179,6 +215,20 @@ def _start_refresh_worker(app: Flask) -> None:
                 except Exception as exc:
                     app.logger.warning("Obnovenie live štatistík workerom zlyhalo: %s", exc)
                 last_live = now
+            if sharp_interval > 0 and now - last_sharp >= sharp_interval:
+                try:
+                    from .sharpapi_source import SharpAPIError, refresh_for_fixtures, sharpapi_enabled, sharpapi_status
+
+                    if sharpapi_enabled():
+                        refresh_for_fixtures(FIXTURES + list(PROVIDER_UPCOMING_FIXTURES.values()))
+                    elif not sharp_logged:
+                        app.logger.info(sharpapi_status())
+                        sharp_logged = True
+                except SharpAPIError as exc:
+                    app.logger.warning("Obnovenie SharpAPI zlyhalo: %s", exc)
+                except Exception as exc:
+                    app.logger.warning("Obnovenie SharpAPI zlyhalo: %s", exc)
+                last_sharp = now
             stop_event.wait(1.0)
 
     thread = threading.Thread(target=worker, name="mocksite-refresh", daemon=True)
@@ -207,6 +257,8 @@ def match_detail(match_id: str):
         fixture=fixture,
         state=state,
         live_details=_live_details(match_id, state),
+        sharp_odds=_sharp_odds_details(match_id, fixture),
+        local_fair_odds=_local_fair_odds(fixture),
     )
 
 

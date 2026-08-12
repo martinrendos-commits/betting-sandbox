@@ -301,6 +301,39 @@ class MyBookPage(BookmakerPage):
 
 ## Kam sa dá projekt posunúť legálne
 
+## SharpAPI kurzy
+
+SharpAPI je voliteľný druhý zdroj športových kurzov. Kľúč patrí do lokálneho
+`.env` ako `SHARPAPI_API_KEY=sk_live_...`; súbor sa necommitujte. Free plán
+umožňuje dva bookmakery, približne 60-sekundové oneskorenie a 12 požiadaviek za
+minútu. Streamovanie na tomto pláne nie je dostupné. Obnovovanie riadi
+`SHARPAPI_REFRESH_S` (predvolene 60 sekúnd) a vypnúť sa dá cez
+`SHARPAPI_DISABLED=true`.
+
+Príkazy sú napríklad:
+
+```text
+python -m sandbox_bot sharp account
+python -m sandbox_bot sharp sports
+python -m sandbox_bot sharp events --league epl --live
+python -m sandbox_bot sharp odds --event EVENT_ID
+python -m sandbox_bot sharp best --event EVENT_ID
+python -m sandbox_bot sharp compare --event EVENT_ID
+python -m sandbox_bot sharp value --event EVENT_ID
+```
+
+SharpAPI udalosti a kurzy sa ukladajú oddelene do SQLite tabuliek
+`sharp_events`, `sharp_odds_snapshots` a `sharp_event_links`. Zápasy sa spájajú
+podľa normalizovaných názvov tímov a času výkopu, nie podľa rovnosti ID.
+Ak SharpAPI poskytuje kurz pre zápas, UI zobrazí SharpAPI kurzy a skryje
+duplicitné kurzy footballdata.io; futbalové štatistiky, udalosti, xG a rozpis
+naďalej pochádzajú z footballdata.io.
+
+SharpAPI kurzy sú iba informačný externý zdroj. Kurz nášho mock bookmakeru,
+tiket aj existujúci +EV tok zostávajú lokálne simulované. Porovnanie s
+lokálnym Poissonovým fair kurzom je označené ako analýza a nikdy nemení kurz
+ponúkaný sandbox bookmakerom.
+
 - vymeniť Poissona za bivariate Poisson / Dixon-Coles (korelácia gólov),
 - kalibrácia modelu (Brier score, log-loss) namiesto sledovania ROI na 4 zápasoch,
 - closing line value ako metrika kvality modelu,

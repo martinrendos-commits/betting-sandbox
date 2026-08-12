@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 from datetime import date, timedelta
@@ -77,6 +78,26 @@ def main(argv: list[str] | None = None) -> int:
     refresh.add_argument("--fixtures", choices=["footballdata", "openliga"], default="footballdata")
     refresh.add_argument("--league", default="")
 
+    sharp = sub.add_parser("sharp", help="SharpAPI odds a referenčné dáta")
+    sharp_sub = sharp.add_subparsers(dest="sharp_command", required=True)
+    for name in ("account", "sports", "leagues", "books", "markets"):
+        sharp_sub.add_parser(name)
+    sharp_events = sharp_sub.add_parser("events")
+    sharp_events.add_argument("--league", default="")
+    sharp_events.add_argument("--live", action="store_true")
+    sharp_events.add_argument("--date", default="")
+    sharp_odds = sharp_sub.add_parser("odds")
+    sharp_odds.add_argument("--event", default="")
+    sharp_odds.add_argument("--league", default="")
+    sharp_odds.add_argument("--market", default="")
+    sharp_odds.add_argument("--live", action="store_true")
+    sharp_best = sharp_sub.add_parser("best")
+    sharp_best.add_argument("--event", required=True)
+    sharp_compare = sharp_sub.add_parser("compare")
+    sharp_compare.add_argument("--event", required=True)
+    sharp_value = sharp_sub.add_parser("value")
+    sharp_value.add_argument("--event", required=True)
+
     ratings = sub.add_parser("ratings", help="vypíše Poisson ratingy z uložených výsledkov")
     ratings.add_argument("--league", default="")
     ratings.add_argument("--home-team", default="")
@@ -101,6 +122,48 @@ def main(argv: list[str] | None = None) -> int:
 
         create_app().run(host="127.0.0.1", port=args.port)
         return 0
+
+    if args.command == "sharp":
+        from mocksite import sharpapi_source
+
+        try:
+            if args.sharp_command == "account":
+                payload = sharpapi_source.account()
+            elif args.sharp_command == "sports":
+                payload = sharpapi_source.sports()
+            elif args.sharp_command == "leagues":
+                payload = sharpapi_source.leagues()
+            elif args.sharp_command == "books":
+                payload = sharpapi_source.sportsbooks()
+            elif args.sharp_command == "markets":
+                payload = sharpapi_source.markets()
+            elif args.sharp_command == "events":
+                params = {"league": args.league or None, "live": True if args.live else None, "date": args.date or None}
+                payload = sharpapi_source.events(**params)
+            elif args.sharp_command == "odds":
+                params = {"event_id": args.event or None, "league": args.league or None, "market": args.market or None, "is_live": True if args.live else None}
+                payload = sharpapi_source.odds(**params)
+            elif args.sharp_command == "best":
+                payload = sharpapi_source.odds_best(event_id=args.event)
+            elif args.sharp_command in {"compare", "value"}:
+                payload = sharpapi_source.event_odds(args.event)
+                rows = sharpapi_source.normalize_odds(payload)
+                print("SharpAPI kurzy (informačný zdroj; nie mock bookmaker):")
+                for row in rows:
+                    print(
+                        f"{row.get('sportsbook', '–')}: {row.get('market_type', '–')} "
+                        f"{row.get('selection', '–')} = {row.get('odds_decimal', '–')}"
+                    )
+                if args.sharp_command == "value":
+                    print("Lokálny fair kurz je dostupný na detaile spárovaného zápasu.")
+                return 0
+            else:
+                payload = sharpapi_source.odds(event_id=args.event)
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+        except sharpapi_source.SharpAPIError as exc:
+            print(f"SharpAPI: {exc}")
+            return 2
 
     if args.command == "fixtures":
         from mocksite import simulator

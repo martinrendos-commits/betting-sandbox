@@ -36,6 +36,43 @@
   </table>
 </div>
 
+<div class="card" data-testid="odds-comparison">
+  <h3>Kurzy a analýza</h3>
+  {% if sharp_odds.rows %}
+  <p class="muted">Zdroj kurzov: SharpAPI (športovky podľa bookmakerov).</p>
+  <table data-testid="sharp-odds">
+    <thead><tr><th>Bookmaker</th><th>Trh</th><th>Výber</th><th>Kurz</th></tr></thead>
+    <tbody>
+    {% for row in sharp_odds.rows %}
+      <tr data-testid="sharp-odds-row">
+        <td>{{ row.sportsbook }}</td><td>{{ row.market_type }}</td>
+        <td>{{ row.selection or "–" }}</td><td>{{ row.odds_decimal or "–" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Zdroj kurzov: footballdata.io (SharpAPI kurzy nie sú pre tento zápas uložené).</p>
+  {% endif %}
+  <p class="muted">Lokálny Poisson fair kurz (analýza, nie kurz sandbox bookmakeru):</p>
+  <table data-testid="fair-odds">
+    <thead><tr><th>Trh</th><th>Výber</th><th>Fair kurz</th><th>Najlepší SharpAPI</th><th>Edge</th></tr></thead>
+    <tbody>
+    {% for fair in local_fair_odds %}
+      {% set best = namespace(odds=none) %}
+      {% for row in sharp_odds.rows if row.market_type == fair.market and row.selection == fair.selection %}
+        {% if best.odds is none or (row.odds_decimal or 0) > best.odds %}{% set best.odds = row.odds_decimal %}{% endif %}
+      {% endfor %}
+      <tr data-market="{{ fair.market }}" data-selection="{{ fair.selection }}">
+        <td>{{ fair.market }}</td><td>{{ fair.selection }}</td><td>{{ fair.odds }}</td>
+        <td>{% if best.odds is none %}–{% else %}{{ best.odds }}{% endif %}</td>
+        <td>{% if best.odds is none %}–{% else %}{{ "%.1f"|format((best.odds / fair.odds - 1) * 100) }}%{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
 <div class="card" data-testid="event-timeline">
   <h3>Udalosti</h3>
   <table>
