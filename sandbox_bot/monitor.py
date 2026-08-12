@@ -26,7 +26,12 @@ def terminal_confirm(signal: ValueSignal, screenshot: str) -> bool:
     print(f"  Náš férový kurz: {signal.fair_odds:.2f}")
     print(f"  Prevaha:      {signal.edge:+.1%}   EV/1 €: {signal.expected_value_per_eur:+.3f} €")
     print(f"  Screenshot:   {screenshot}")
-    answer = input("Podať tiket v sandboxe? [y/N]: ").strip().lower()
+    try:
+        answer = input("Podať tiket v sandboxe? [y/N]: ").strip().lower()
+    except EOFError:
+        # No interactive terminal: never submit without a human saying so.
+        print("\nBez interaktívneho terminálu – tiket sa nepodáva.")
+        return False
     return answer == "y"
 
 
@@ -44,18 +49,33 @@ class LiveMonitor:
         self.pregame: dict[str, PregameModel] = {}
 
     # -- phase 1: pre-game ---------------------------------------------------
-    def build_pregame_models(self) -> dict[str, PregameModel]:
-        self.livescore.open_match_list()
-        for match in self.livescore.list_matches():
-            self.livescore.open_match(match["match_id"])
-            history = self.livescore.read_h2h()
-            model = build_pregame_model(
-                match["match_id"], match["home"], match["away"], history
+    def build_pregame_models(self, live_only: bool = False) -> dict[str, PregameModel]:
+        self.livescore.open_match_list(live_only=live_only)
+        matches = self.livescore.list_matches()
+        if not matches:
+            log.warning(
+                "Portál nevrátil žiadne zápasy. Skontroluj MOCK_FIXTURES / MOCK_DATE / MOCK_LEAGUE."
             )
-            self.pregame[match["match_id"]] = model
-            log.info("Pregame model:\n%s", model.describe())
+        for match in matches:
+            self._model_for(match["match_id"])
             sleep_between_polls(1.0)
         return self.pregame
+
+    def _model_for(self, match_id: str) -> PregameModel:
+        """Build (and cache) the pre-game model for one match.
+
+        Done lazily so matches that kick off later in the day are picked up as
+        soon as they appear in the live offer.
+        """
+        cached = self.pregame.get(match_id)
+        if cached is not None:
+            return cached
+        self.livescore.open_match(match_id)
+        stats = self.livescore.read_live_stats()
+        model = build_pregame_model(match_id, stats.home, stats.away, self.livescore.read_h2h())
+        self.pregame[match_id] = model
+        log.info("Pregame model:\n%s", model.describe())
+        return model
 
     # -- phase 2: live -------------------------------------------------------
     def poll_once(self) -> list[ValueSignal]:
@@ -65,14 +85,15 @@ class LiveMonitor:
         stats_cache: dict[str, LiveStats] = {}
 
         for quote in quotes:
-            model = self.pregame.get(quote.match_id)
-            if model is None:
-                continue
+            model = self._model_for(quote.match_id)
             if quote.match_id not in stats_cache:
                 self.livescore.open_match(quote.match_id)
                 stats_cache[quote.match_id] = self.livescore.read_live_stats()
-            signal = evaluate_quote(quote, model.expected_goals, stats_cache[quote.match_id])
-            signals.append(signal)
+            stats = stats_cache[quote.match_id]
+            if not stats.is_live:
+                # The portal says the match is not being played right now.
+                continue
+            signals.append(evaluate_quote(quote, model.expected_goals, stats))
 
         for match_id in {q.match_id for q in quotes}:
             pair = [q for q in quotes if q.match_id == match_id]
@@ -85,14 +106,15 @@ class LiveMonitor:
         return signals
 
     def run(self, max_rounds: int | None = None) -> None:
-        self.build_pregame_models()
         self.bookmaker.open()
         rounds = 0
         while max_rounds is None or rounds < max_rounds:
             rounds += 1
             signals = self.poll_once()
             best = max(signals, key=lambda s: s.edge, default=None)
-            if best is not None:
+            if best is None:
+                log.info("kolo %s: v ponuke nie je žiadny live zápas", rounds)
+            else:
                 log.info(
                     "kolo %s: najlepšia prevaha %.1f%% (%s %s @ %.2f, fér %.2f)",
                     rounds,

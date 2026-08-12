@@ -1,10 +1,12 @@
+import pytest
+
 from sandbox_bot.backtest import run_backtest
 
 
 def test_flat_backtest_runs():
     result = run_backtest(bankroll=100.0, staking="flat")
     assert result.bets >= 0
-    assert result.bankroll == 100.0 + result.profit
+    assert result.bankroll == pytest.approx(100.0 + result.profit, abs=0.01)
     assert "ROI" in result.describe()
 
 

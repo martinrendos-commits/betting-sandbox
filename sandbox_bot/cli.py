@@ -4,8 +4,19 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+from datetime import date
 
 from .config import SETTINGS
+
+
+def _apply_source_env(args: argparse.Namespace) -> None:
+    """The mock site reads its fixture source from the environment."""
+    os.environ["MOCK_FIXTURES"] = args.fixtures
+    os.environ["MOCK_LEAGUE"] = args.league
+    os.environ["MOCK_CLOCK"] = args.clock
+    if args.date:
+        os.environ["MOCK_DATE"] = args.date
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -13,7 +24,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("serve", help="spustí lokálne mock stránky na porte 8000")
+    def add_source_args(sub_parser: argparse.ArgumentParser) -> None:
+        sub_parser.add_argument(
+            "--fixtures",
+            default=os.environ.get("MOCK_FIXTURES", "synthetic"),
+            help="synthetic | openliga | cesta k JSON súboru",
+        )
+        sub_parser.add_argument("--league", default=os.environ.get("MOCK_LEAGUE", "bl1"))
+        sub_parser.add_argument("--date", default=os.environ.get("MOCK_DATE"))
+        sub_parser.add_argument(
+            "--clock",
+            choices=["real", "demo"],
+            default=os.environ.get("MOCK_CLOCK", "real"),
+            help="real = podľa skutočných výkopov, demo = všetko beží hneď zrýchlene",
+        )
+
+    serve = sub.add_parser("serve", help="spustí lokálne mock stránky na porte 8000")
+    add_source_args(serve)
+    serve.add_argument("--port", type=int, default=8000)
+
+    fixtures_cmd = sub.add_parser("fixtures", help="vypíše načítaný rozpis a stav zápasov")
+    add_source_args(fixtures_cmd)
 
     pregame = sub.add_parser("pregame", help="vyscrapuje H2H a vypíše férové kurzy")
     pregame.add_argument("--headless", action="store_true")
@@ -35,10 +66,33 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%H:%M:%S",
     )
 
+    if args.command in {"serve", "fixtures"}:
+        _apply_source_env(args)
+
     if args.command == "serve":
         from mocksite.app import create_app
 
-        create_app().run(host="127.0.0.1", port=8000)
+        create_app().run(host="127.0.0.1", port=args.port)
+        return 0
+
+    if args.command == "fixtures":
+        from mocksite import simulator
+        from mocksite.data import FIXTURES
+        from mocksite.fixtures_source import next_matchdays
+
+        if not FIXTURES:
+            print("Pre zvolený deň a ligu nie sú žiadne zápasy.")
+            if args.fixtures == "openliga":
+                upcoming = next_matchdays(args.league, date.today())
+                if upcoming:
+                    print("Najbližšie hracie dni:", ", ".join(d.isoformat() for d in upcoming))
+            return 0
+        for fixture in FIXTURES:
+            state = simulator.state_of(fixture.match_id)
+            print(
+                f"{fixture.kickoff}  {fixture.home} – {fixture.away}"
+                f"  [{state.status}] {state.minute}'  H2H={len(fixture.h2h)}"
+            )
         return 0
 
     if args.command == "pregame":

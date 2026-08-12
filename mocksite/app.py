@@ -10,6 +10,8 @@ target, without touching anybody else's service.
 
 from __future__ import annotations
 
+import os
+
 from flask import Blueprint, Flask, jsonify, render_template, request
 
 from . import simulator
@@ -19,10 +21,18 @@ livescore = Blueprint("livescore", __name__, url_prefix="/livescore")
 bookmaker = Blueprint("bookmaker", __name__, url_prefix="/book")
 
 
+def _rows(live_only: bool = False):
+    rows = [(fixture, simulator.state_of(fixture.match_id)) for fixture in FIXTURES]
+    return [row for row in rows if row[1].is_live] if live_only else rows
+
+
 @livescore.get("/")
 def match_list():
-    rows = [(fixture, simulator.state_of(fixture.match_id)) for fixture in FIXTURES]
-    return render_template("livescore_list.html", rows=rows)
+    return render_template(
+        "livescore_list.html",
+        rows=_rows(live_only=request.args.get("live") == "1"),
+        live_filter=request.args.get("live") == "1",
+    )
 
 
 @livescore.get("/match/<match_id>")
@@ -42,8 +52,8 @@ def bookmaker_home():
 
 @bookmaker.get("/live")
 def live_offer():
-    rows = [(fixture, simulator.state_of(fixture.match_id)) for fixture in FIXTURES]
-    return render_template("bookmaker_live.html", rows=rows)
+    """Only matches that are actually in play appear in a live offer."""
+    return render_template("bookmaker_live.html", rows=_rows(live_only=True))
 
 
 @bookmaker.get("/api/odds")
@@ -55,11 +65,12 @@ def odds_api():
                 "match_id": fixture.match_id,
                 "home": fixture.home,
                 "away": fixture.away,
-                "minute": simulator.state_of(fixture.match_id).minute,
-                "over_2_5": simulator.state_of(fixture.match_id).over25_odds,
-                "under_2_5": simulator.state_of(fixture.match_id).under25_odds,
+                "status": state.status,
+                "minute": state.minute,
+                "over_2_5": state.over25_odds,
+                "under_2_5": state.under25_odds,
             }
-            for fixture in FIXTURES
+            for fixture, state in _rows()
         ]
     )
 
@@ -84,7 +95,12 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index():
-        return render_template("index.html")
+        return render_template(
+            "index.html",
+            rows=_rows(),
+            clock_mode=simulator.clock_mode(),
+            source=os.environ.get("MOCK_FIXTURES", "synthetic"),
+        )
 
     return app
 

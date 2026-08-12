@@ -1,10 +1,18 @@
 {% extends "base.html" %}
 {% block title %}{{ fixture.home }} – {{ fixture.away }}{% endblock %}
 {% block content %}
-<h2 data-testid="match-title">{{ fixture.home }} – {{ fixture.away }}</h2>
+<h2 data-testid="match-title">
+  <span data-field="home">{{ fixture.home }}</span> –
+  <span data-field="away">{{ fixture.away }}</span>
+</h2>
 
-<div class="card" data-testid="live-panel" data-match-id="{{ fixture.match_id }}">
+<div class="card" data-testid="live-panel" data-match-id="{{ fixture.match_id }}"
+     data-status="{{ state.status }}">
   <h3>Live štatistiky</h3>
+  <p class="muted">
+    {{ fixture.competition }} · výkop {{ fixture.kickoff }} ·
+    <span data-field="status">{{ state.status }}</span>
+  </p>
   <p>
     <span class="badge" data-field="minute">{{ state.minute }}'</span>
     <strong data-field="score">{{ state.home_goals }}:{{ state.away_goals }}</strong>

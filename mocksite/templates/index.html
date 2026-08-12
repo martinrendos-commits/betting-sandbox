@@ -8,6 +8,28 @@
     <li><a href="/livescore/">Mock Livescore</a> – zápasy dňa, H2H história, live štatistiky</li>
     <li><a href="/book/live">Mock Bookmaker</a> – live ponuka over/under 2.5, tiket, podanie</li>
   </ul>
-  <p class="muted">Všetky dáta sú generované lokálne z fixného seedu.</p>
+  <p class="muted">
+    Zdroj rozpisu: <b>{{ source }}</b> · režim hodín: <b>{{ clock_mode }}</b><br>
+    Rozpis a historické výsledky môžu byť reálne; minútové štatistiky a všetky kurzy
+    sú simulované lokálne.
+  </p>
+</div>
+
+<div class="card">
+  <h3>Dnešný rozpis ({{ rows|length }})</h3>
+  <table>
+    <thead><tr><th>Výkop</th><th>Zápas</th><th>Stav</th></tr></thead>
+    <tbody>
+    {% for fixture, state in rows %}
+      <tr>
+        <td>{{ fixture.kickoff }}</td>
+        <td>{{ fixture.home }} – {{ fixture.away }}</td>
+        <td><span class="badge">{{ state.status }}</span></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="3">Žiadne zápasy – skús iný deň alebo ligu (MOCK_DATE, MOCK_LEAGUE).</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
 </div>
 {% endblock %}

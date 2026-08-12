@@ -52,15 +52,67 @@ python -m sandbox_bot backtest --staking kelly --threshold 0.12
 pytest -q
 ```
 
-Rýchlosť simulácie sa dá meniť: `MOCK_MINUTES_PER_SECOND=6 python -m sandbox_bot serve`
-(default 3 minúty zápasu za sekundu, takže zápas trvá ~30 s).
+## Rozpis zápasov: reálny alebo syntetický
+
+Rozpis (kto s kým a o koľkej) sa dá načítať z otvorených dát; **live štatistiky
+a všetky kurzy sú vždy simulované lokálne** – nescrapujú sa zo žiadnej kancelárie.
+
+```bash
+# reálny rozpis z OpenLigaDB (otvorené dáta, bez kľúča a bez registrácie)
+python -m sandbox_bot serve --fixtures openliga --league bl1
+
+# vlastný JSON so zápasmi
+python -m sandbox_bot serve --fixtures /cesta/k/zapasy.json
+
+# offline syntetický rozpis (default)
+python -m sandbox_bot serve --fixtures synthetic
+
+# čo je načítané a v akom stave to práve je
+python -m sandbox_bot fixtures --fixtures openliga --date 2026-08-28
+```
+
+Prepínače majú aj ekvivalent v premenných prostredia: `MOCK_FIXTURES`,
+`MOCK_LEAGUE`, `MOCK_DATE`, `MOCK_CLOCK`, `MOCK_MINUTES_PER_SECOND`.
+Stiahnuté sezóny sa cachujú do `.cache/`.
+
+### Režim hodín
+
+- `--clock real` (default) – zápas je `live` iba v reálnom okne od výkopu do
+  výkop + 105 min. Pred výkopom je `scheduled`, potom `finished`. `/book/live`
+  ponúka **len práve hrané** zápasy a monitor sleduje len tie; keď sa nehrá nič,
+  stránka aj monitor korektne zobrazia prázdny stav.
+- `--clock demo` – všetky zápasy dňa začnú pri štarte servera a bežia zrýchlene
+  (`MOCK_MINUTES_PER_SECOND`, default 3 → zápas trvá ~30 s). Vhodné na nácvik,
+  keď sa práve nič nehrá.
+
+Formát vlastného JSON súboru:
+
+```json
+[
+  {
+    "match_id": "m1",
+    "home": "Tím A",
+    "away": "Tím B",
+    "kickoff_utc": "2026-08-12T17:00:00Z",
+    "competition": "Liga",
+    "h2h": [
+      {"played_on": "2025-04-01", "home": "Tím A", "away": "Tím B",
+       "home_goals": 2, "away_goals": 1}
+    ]
+  }
+]
+```
+
+Keď na dnešný deň v danej lige nie sú zápasy, program to povie a nič potichu
+nenahradí – `fixtures` vypíše najbližšie hracie dni.
 
 ## Štruktúra
 
 ```
 mocksite/           lokálne simulované stránky
-  data.py           tímy, zápasy, H2H história (fixný seed)
-  simulator.py      celá 90-minútová časová os zápasu + kurzy s maržou
+  fixtures_source.py zdroje rozpisu: OpenLigaDB / vlastný JSON / syntetický
+  data.py           aktuálne načítaný rozpis (FIXTURES) + reload
+  simulator.py      stav zápasu (scheduled/live/finished), časová os + kurzy s maržou
   app.py            Flask: /livescore a /book
 sandbox_bot/
   config.py         VŠETKY konfiguračné premenné (URL, prah, vklad, headless…)

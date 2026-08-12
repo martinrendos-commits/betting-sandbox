@@ -17,6 +17,8 @@ from ..models import MarketQuote
 class BookmakerPage:
     SELECTORS: dict[str, str] = {
         "offer_card": '[data-testid="offer-card"]',
+        # The live offer can legitimately be empty when nothing is being played.
+        "offer_or_empty": '[data-testid="offer-card"], [data-testid="no-live-matches"]',
         "odds_button": '[data-testid="odds-button"]',
         # A card + market pair; format with match_id and market.
         "odds_button_for": (
@@ -38,7 +40,7 @@ class BookmakerPage:
     # -- navigation ---------------------------------------------------------
     def open(self) -> None:
         self.page.goto(self.url, wait_until="domcontentloaded")
-        self.page.wait_for_selector(self.SELECTORS["offer_card"])
+        self.page.wait_for_selector(self.SELECTORS["offer_or_empty"])
 
     def refresh(self) -> None:
         self.page.reload(wait_until="domcontentloaded")

@@ -9,6 +9,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# The suite runs against synthetic fixtures on the demo clock so that matches are
+# always in play, regardless of when the tests happen to run.
+os.environ.setdefault("MOCK_FIXTURES", "synthetic")
+os.environ.setdefault("MOCK_CLOCK", "demo")
+os.environ.setdefault("MOCK_MINUTES_PER_SECOND", "0.05")
+
 
 def _free_port() -> int:
     with socket.socket() as sock:
@@ -37,8 +43,7 @@ def mock_site() -> str:
             f"from mocksite.app import create_app; create_app().run(port={port})",
         ],
         cwd=ROOT,
-        # Slow the virtual clock right down so markets stay open for the whole run.
-        env={**os.environ, "MOCK_MINUTES_PER_SECOND": "0.05"},
+        env={**os.environ},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

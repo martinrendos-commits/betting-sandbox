@@ -2,20 +2,27 @@
 {% block title %}Zápasy dňa{% endblock %}
 {% block content %}
 <h2>Zápasy dňa</h2>
+<p class="muted">
+  {% if live_filter %}<a href="/livescore/">zobraziť všetky</a>
+  {% else %}<a href="/livescore/?live=1">len práve hrané</a>{% endif %}
+</p>
 <table data-testid="match-table">
   <thead>
-    <tr><th>Výkop</th><th>Domáci</th><th>Hostia</th><th>Skóre</th><th>Minúta</th><th></th></tr>
+    <tr><th>Výkop</th><th>Domáci</th><th>Hostia</th><th>Skóre</th><th>Minúta</th><th>Stav</th><th></th></tr>
   </thead>
   <tbody>
   {% for fixture, state in rows %}
-    <tr data-testid="match-row" data-match-id="{{ fixture.match_id }}">
+    <tr data-testid="match-row" data-match-id="{{ fixture.match_id }}" data-status="{{ state.status }}">
       <td data-field="kickoff">{{ fixture.kickoff }}</td>
       <td data-field="home">{{ fixture.home }}</td>
       <td data-field="away">{{ fixture.away }}</td>
       <td data-field="score">{{ state.home_goals }}:{{ state.away_goals }}</td>
       <td data-field="minute">{{ state.minute }}'</td>
+      <td><span class="badge" data-field="status">{{ state.status }}</span></td>
       <td><a data-testid="match-link" href="/livescore/match/{{ fixture.match_id }}">detail</a></td>
     </tr>
+  {% else %}
+    <tr><td colspan="7" data-testid="no-matches">Žiadne zápasy pre zvolený deň a ligu.</td></tr>
   {% endfor %}
   </tbody>
 </table>

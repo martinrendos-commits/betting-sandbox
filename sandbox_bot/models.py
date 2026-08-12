@@ -31,6 +31,12 @@ class LiveStats:
     away_shots: int
     home_corners: int
     away_corners: int
+    status: str = "live"
+    """``scheduled``, ``live`` or ``finished`` as reported by the portal."""
+
+    @property
+    def is_live(self) -> bool:
+        return self.status == "live"
 
     @property
     def total_goals(self) -> int:

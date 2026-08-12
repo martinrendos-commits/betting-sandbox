@@ -27,9 +27,10 @@ class LivescorePage:
         self.base_url = base_url
 
     # -- navigation ---------------------------------------------------------
-    def open_match_list(self) -> None:
-        self.page.goto(self.base_url, wait_until="domcontentloaded")
-        self.page.wait_for_selector(self.SELECTORS["match_row"])
+    def open_match_list(self, live_only: bool = False) -> None:
+        url = f"{self.base_url}?live=1" if live_only else self.base_url
+        self.page.goto(url, wait_until="domcontentloaded")
+        self.page.wait_for_selector('[data-testid="match-table"]')
 
     def open_match(self, match_id: str) -> None:
         url = f"{self.base_url.rstrip('/')}/match/{match_id}"
@@ -51,6 +52,7 @@ class LivescorePage:
                     "home": row.locator('[data-field="home"]').inner_text().strip(),
                     "away": row.locator('[data-field="away"]').inner_text().strip(),
                     "kickoff": row.locator('[data-field="kickoff"]').inner_text().strip(),
+                    "status": row.get_attribute("data-status") or "",
                 }
             )
         return matches
@@ -80,8 +82,9 @@ class LivescorePage:
         home_goals, away_goals = panel.locator('[data-field="score"]').inner_text().split(":")
         shots = self._stat_pair("shots")
         corners = self._stat_pair("corners")
-        title = self.page.locator('[data-testid="match-title"]').inner_text()
-        home, away = (part.strip() for part in title.split("–"))
+        title = self.page.locator('[data-testid="match-title"]')
+        home = title.locator('[data-field="home"]').inner_text().strip()
+        away = title.locator('[data-field="away"]').inner_text().strip()
         return LiveStats(
             match_id=panel.get_attribute("data-match-id") or "",
             home=home,
@@ -93,6 +96,7 @@ class LivescorePage:
             away_shots=shots[1],
             home_corners=corners[0],
             away_corners=corners[1],
+            status=panel.get_attribute("data-status") or "live",
         )
 
     def _stat_pair(self, stat: str) -> tuple[int, int]:
