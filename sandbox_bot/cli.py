@@ -75,6 +75,8 @@ def main(argv: list[str] | None = None) -> int:
 
     ratings = sub.add_parser("ratings", help="vypíše Poisson ratingy z uložených výsledkov")
     ratings.add_argument("--league", default="")
+    ratings.add_argument("--home-team", default="")
+    ratings.add_argument("--away-team", default="")
 
     args = parser.parse_args(argv)
     logging.basicConfig(
@@ -170,18 +172,29 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 fixtures = load_fixtures(args.fixtures, league=args.league or None, on_date=day)
                 total += len(fixtures)
-                print(f"{day.isoformat()}: {len(fixtures)} zápasov")
+                with connect() as connection:
+                    stored = connection.execute(
+                        "SELECT COUNT(*) FROM matches WHERE source = ?", (args.fixtures,)
+                    ).fetchone()[0]
+                print(
+                    f"{day.isoformat()}: v rozvrhu po filtrovaní {len(fixtures)} zápasov; "
+                    f"uložené do DB celkom {stored}"
+                )
             except (OSError, RuntimeError, ValueError) as exc:
                 print(f"{day.isoformat()}: chyba – {exc}")
         with connect() as connection:
             stored = connection.execute(
                 "SELECT COUNT(*) FROM matches WHERE source = ?", (args.fixtures,)
             ).fetchone()[0]
-        print(f"Uložených zápasov: {stored} (načítaných v rozvrhu: {total})")
+        print(f"Uložené do DB: {stored}; vhodné do rozvrhu spolu: {total}")
         return 0
 
     if args.command == "ratings":
         from .ratings import load_league_rating
+        from .ratings import pair_odds
+
+        if bool(args.home_team) != bool(args.away_team):
+            parser.error("--home-team a --away-team treba zadať spolu")
 
         with connect() as connection:
             league_rows = connection.execute(
@@ -203,11 +216,23 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             print(f"\n{league_name} ({league_id}) – {rating.matches} dokončených zápasov")
             print(f"Priemer gólov: doma {rating.average_home_goals:.2f}, vonku {rating.average_away_goals:.2f}")
-            if rating.fallback:
+            if rating.has_small_sample:
                 print(f"Malá vzorka (< {3} zápasy tímu alebo ligy): použije sa ligový/xG odhad.")
             for team in sorted(rating.teams, key=lambda item: item.home_attack, reverse=True)[:10]:
                 print(f"  {team.name}: útok doma {team.home_attack:.2f}, obrana doma {team.home_defence:.2f}, "
                       f"útok vonku {team.away_attack:.2f}, obrana vonku {team.away_defence:.2f}")
+            if args.home_team and args.away_team:
+                odds = pair_odds(rating, args.home_team, args.away_team)
+                if odds is None:
+                    print(f"Pár {args.home_team} – {args.away_team}: tím sa v lige nenašiel.")
+                else:
+                    mode = "fallback ligového/xG odhadu" if odds.used_fallback else "sily tímov"
+                    print(
+                        f"Pár {args.home_team} – {args.away_team}: {mode}; "
+                        f"λ {odds.lambda_home:.2f} – {odds.lambda_away:.2f}; "
+                        f"1X2 {odds.home:.2f}/{odds.draw:.2f}/{odds.away:.2f}; "
+                        f"O/U 2.5 {odds.over_25:.2f}/{odds.under_25:.2f}"
+                    )
         return 0
 
     return 1

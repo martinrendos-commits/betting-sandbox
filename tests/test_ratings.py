@@ -47,9 +47,43 @@ def test_small_sample_falls_back_to_xg(tmp_path):
     store_match_payloads([item], source="test", path=path)
     rating = load_league_rating("9", path)
     assert rating is not None
-    assert rating.fallback
+    assert rating.has_small_sample
     assert rating.matches < MIN_FINISHED_MATCHES
     odds = pair_odds(rating, "A", "B")
     assert odds is not None
     assert odds.lambda_home == 1.2
     assert odds.lambda_away == 0.8
+    assert odds.used_fallback
+
+
+def test_fallback_is_decided_per_pair(tmp_path):
+    path = tmp_path / "ratings.sqlite3"
+    results = [
+        match(1, "A", "B", 3, 0),
+        match(2, "B", "A", 1, 1),
+        match(3, "A", "B", 2, 1),
+        match(4, "B", "A", 0, 2),
+        match(5, "A", "B", 2, 0),
+        match(6, "B", "A", 1, 1),
+        match(7, "X", "B", 1, 0),
+    ]
+    store_match_payloads(results, source="test", path=path)
+    rating = load_league_rating("Test Liga", path)
+    assert rating is not None
+    assert rating.has_small_sample
+    covered = pair_odds(rating, "A", "B")
+    sparse = pair_odds(rating, "X", "B")
+    assert covered is not None and sparse is not None
+    assert not covered.used_fallback
+    assert sparse.used_fallback
+
+
+def test_numeric_league_id_matches_exactly(tmp_path):
+    path = tmp_path / "ratings.sqlite3"
+    item = match(1, "A", "B", 1, 0)
+    store_match_payloads([item], source="test", path=path)
+    other = {**match(2, "C", "D", 2, 0), "league": {"league_id": 19, "name": "League 19"}}
+    store_match_payloads([other], source="test", path=path)
+    rating = load_league_rating("9", path)
+    assert rating is not None
+    assert rating.league_name == "Test Liga"

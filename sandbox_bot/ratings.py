@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,7 +34,7 @@ class LeagueRating:
     average_home_xg: float
     average_away_xg: float
     teams: list[TeamRating]
-    fallback: bool
+    has_small_sample: bool
 
 
 @dataclass(frozen=True)
@@ -47,13 +46,19 @@ class PairOdds:
     away: float
     over_25: float
     under_25: float
+    used_fallback: bool
 
 
 def _league_id(connection: sqlite3.Connection, value: str) -> str | None:
-    row = connection.execute(
-        "SELECT league_id FROM leagues WHERE league_id = ? OR lower(name) LIKE ? LIMIT 1",
-        (value, f"%{value.lower()}%"),
-    ).fetchone()
+    if value.isdigit():
+        row = connection.execute(
+            "SELECT league_id FROM leagues WHERE league_id = ? LIMIT 1", (value,)
+        ).fetchone()
+    else:
+        row = connection.execute(
+            "SELECT league_id FROM leagues WHERE lower(name) LIKE ? LIMIT 1",
+            (f"%{value.lower()}%",),
+        ).fetchone()
     return str(row[0]) if row else None
 
 
@@ -102,7 +107,7 @@ def load_league_rating(league: str, path: str | Path | None = None) -> LeagueRat
                     away_defence=(away_allowed / len(away_rows) / home_average) if away_rows else 1.0,
                 )
             )
-        fallback = len(rows) < MIN_FINISHED_MATCHES or any(
+        has_small_sample = len(rows) < MIN_FINISHED_MATCHES or any(
             team.matches < MIN_FINISHED_MATCHES for team in teams
         )
         return LeagueRating(
@@ -114,7 +119,7 @@ def load_league_rating(league: str, path: str | Path | None = None) -> LeagueRat
             average_home_xg=home_xg,
             average_away_xg=away_xg,
             teams=teams,
-            fallback=fallback,
+            has_small_sample=has_small_sample,
         )
 
 
@@ -122,13 +127,17 @@ def pair_odds(
     rating: LeagueRating,
     home_team: str,
     away_team: str,
-    path: str | Path | None = None,
 ) -> PairOdds | None:
     home = next((team for team in rating.teams if team.team_id == home_team or team.name.lower() == home_team.lower()), None)
     away = next((team for team in rating.teams if team.team_id == away_team or team.name.lower() == away_team.lower()), None)
     if home is None or away is None:
         return None
-    if rating.fallback:
+    used_fallback = (
+        rating.matches < MIN_FINISHED_MATCHES
+        or home.matches < MIN_FINISHED_MATCHES
+        or away.matches < MIN_FINISHED_MATCHES
+    )
+    if used_fallback:
         lam_home = rating.average_home_xg
         lam_away = rating.average_away_xg
     else:
@@ -151,4 +160,5 @@ def pair_odds(
         away=probability_to_odds(away_probability),
         over_25=probability_to_odds(1.0 - under_probability),
         under_25=probability_to_odds(under_probability),
+        used_fallback=used_fallback,
     )

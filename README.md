@@ -169,12 +169,15 @@ výsledky sa dajú zobraziť podľa ligy:
 ```bash
 python -m sandbox_bot ratings
 python -m sandbox_bot ratings --league 9
+python -m sandbox_bot ratings --league 9 --home-team "A" --away-team "B"
 ```
 
 `ratings` počíta ligový priemer gólov a silu útoku/obrany doma aj vonku.
 Tieto hodnoty tvoria Poissonov odhad oddelene pre každú súťaž. Pri malej vzorke
-(menej ako tri dokončené zápasy ligy alebo tímu) sa použije konzervatívny
-ligový alebo providerový xG odhad, nie nespoľahlivá sila tímu.
+(menej ako tri dokončené zápasy ligy alebo zúčastneného tímu) sa pri konkrétnom
+páre použije konzervatívny ligový alebo providerový xG odhad, nie nespoľahlivá
+sila tímu. Iný, dostatočne pokrytý pár v rovnakej lige môže stále použiť tímové
+sily.
 
 ## Štruktúra
 
