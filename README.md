@@ -58,6 +58,9 @@ Rozpis (kto s kým a o koľkej) sa dá načítať z otvorených dát; **live št
 a všetky kurzy sú vždy simulované lokálne** – nescrapujú sa zo žiadnej kancelárie.
 
 ```bash
+# reálny rozpis z footballdata.io (vyžaduje API kľúč, viď nižšie)
+python -m sandbox_bot serve --fixtures footballdata
+
 # reálny rozpis z OpenLigaDB (otvorené dáta, bez kľúča a bez registrácie)
 python -m sandbox_bot serve --fixtures openliga --league bl1
 
@@ -72,8 +75,33 @@ python -m sandbox_bot fixtures --fixtures openliga --date 2026-08-28
 ```
 
 Prepínače majú aj ekvivalent v premenných prostredia: `MOCK_FIXTURES`,
-`MOCK_LEAGUE`, `MOCK_DATE`, `MOCK_CLOCK`, `MOCK_MINUTES_PER_SECOND`.
-Stiahnuté sezóny sa cachujú do `.cache/`.
+`MOCK_LEAGUE`, `MOCK_DATE`, `MOCK_CLOCK`, `MOCK_MINUTES_PER_SECOND`,
+`MOCK_REFRESH_S`. Stiahnuté odpovede sa cachujú do `.cache/`.
+
+### footballdata.io
+
+Kľúč sa **nikdy nepíše do kódu** – načíta sa z premennej prostredia:
+
+```powershell
+# Windows PowerShell
+$env:FOOTBALLDATA_API_KEY = "fd_..."
+python -m sandbox_bot fixtures --fixtures footballdata
+```
+
+```bash
+# Linux / macOS
+export FOOTBALLDATA_API_KEY=fd_...
+python -m sandbox_bot serve --fixtures footballdata --league "Premier League"
+python -m sandbox_bot serve --fixtures footballdata --league 9   # alebo league_id
+python -m sandbox_bot fixtures --fixtures footballdata --date 2026-08-13
+```
+
+Z API sa berú len **názvy tímov, čas výkopu, súťaž, stav zápasu, prematch xG
+a H2H**; minútové live štatistiky aj kurzy si sandbox naďalej generuje sám.
+Odpovede sú cachované (dnešný rozpis 2 min, H2H 24 h) a H2H sa ťahá najviac pre
+20 zápasov dňa, aby sa zbytočne nemíňal limit. Bežiaci server si rozpis sám
+obnoví každých `MOCK_REFRESH_S` sekúnd (default 300, `0` vypne).
+Už odohrané / zrušené / odložené zápasy sa do rozpisu neberú.
 
 ### Režim hodín
 

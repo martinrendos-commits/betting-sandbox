@@ -7,11 +7,16 @@ matches exist.
 
 from __future__ import annotations
 
+import logging
 import math
+import os
 import random
+import time
 from datetime import date
 
 from .fixtures_source import Fixture, H2HMatch, load_fixtures
+
+log = logging.getLogger("mocksite.data")
 
 SYNTHETIC_TEAMS = [
     ("Slovan Bratislava", 1.85, 1.05),
@@ -38,6 +43,9 @@ def poisson_sample(rng: random.Random, lam: float) -> int:
 
 FIXTURES: list[Fixture] = []
 FIXTURES_BY_ID: dict[str, Fixture] = {}
+_LAST_LOAD = 0.0
+#: Providers whose schedule/status can change while the server runs.
+REMOTE_SOURCES = frozenset({"openliga", "footballdata"})
 
 
 def reload_fixtures(
@@ -48,7 +56,10 @@ def reload_fixtures(
     The containers are mutated in place so modules that did
     ``from .data import FIXTURES`` keep seeing the current data.
     """
+    global _LAST_LOAD
+
     fixtures = load_fixtures(source, league=league, on_date=on_date)
+    _LAST_LOAD = time.time()
     FIXTURES[:] = fixtures
     FIXTURES_BY_ID.clear()
     FIXTURES_BY_ID.update({fixture.match_id: fixture for fixture in fixtures})
@@ -57,6 +68,23 @@ def reload_fixtures(
 
     simulator.rebuild_timelines()
     return FIXTURES
+
+
+def refresh_if_stale() -> None:
+    """Re-poll a remote provider so kickoff times and statuses stay current.
+
+    ``MOCK_REFRESH_S=0`` turns it off; the provider responses are cached on disk,
+    so this does not mean one upstream request per page view.
+    """
+    interval = float(os.environ.get("MOCK_REFRESH_S", "300"))
+    if interval <= 0 or os.environ.get("MOCK_FIXTURES", "synthetic") not in REMOTE_SOURCES:
+        return
+    if time.time() - _LAST_LOAD < interval:
+        return
+    try:
+        reload_fixtures()
+    except (OSError, RuntimeError, ValueError) as exc:
+        log.warning("Obnovenie rozpisu zlyhalo, ostávam pri poslednom: %s", exc)
 
 
 reload_fixtures()
@@ -69,5 +97,6 @@ __all__ = [
     "H2HMatch",
     "SYNTHETIC_TEAMS",
     "poisson_sample",
+    "refresh_if_stale",
     "reload_fixtures",
 ]

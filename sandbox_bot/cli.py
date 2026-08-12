@@ -13,8 +13,9 @@ from .config import SETTINGS
 def _apply_source_env(args: argparse.Namespace) -> None:
     """The mock site reads its fixture source from the environment."""
     os.environ["MOCK_FIXTURES"] = args.fixtures
-    os.environ["MOCK_LEAGUE"] = args.league
     os.environ["MOCK_CLOCK"] = args.clock
+    if args.league:
+        os.environ["MOCK_LEAGUE"] = args.league
     if args.date:
         os.environ["MOCK_DATE"] = args.date
 
@@ -28,9 +29,13 @@ def main(argv: list[str] | None = None) -> int:
         sub_parser.add_argument(
             "--fixtures",
             default=os.environ.get("MOCK_FIXTURES", "synthetic"),
-            help="synthetic | openliga | cesta k JSON súboru",
+            help="synthetic | openliga | footballdata | cesta k JSON súboru",
         )
-        sub_parser.add_argument("--league", default=os.environ.get("MOCK_LEAGUE", "bl1"))
+        sub_parser.add_argument(
+            "--league",
+            default=os.environ.get("MOCK_LEAGUE", ""),
+            help="openliga: skratka ligy (bl1); footballdata: league_id alebo časť názvu",
+        )
         sub_parser.add_argument("--date", default=os.environ.get("MOCK_DATE"))
         sub_parser.add_argument(
             "--clock",
@@ -78,14 +83,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "fixtures":
         from mocksite import simulator
         from mocksite.data import FIXTURES
-        from mocksite.fixtures_source import next_matchdays
+        from mocksite.fixtures_source import footballdata_matchdays, next_matchdays
 
         if not FIXTURES:
             print("Pre zvolený deň a ligu nie sú žiadne zápasy.")
+            upcoming: list[date] = []
             if args.fixtures == "openliga":
-                upcoming = next_matchdays(args.league, date.today())
-                if upcoming:
-                    print("Najbližšie hracie dni:", ", ".join(d.isoformat() for d in upcoming))
+                upcoming = next_matchdays(args.league or "bl1", date.today())
+            elif args.fixtures == "footballdata":
+                upcoming = footballdata_matchdays()
+            if upcoming:
+                print("Najbližšie hracie dni:", ", ".join(d.isoformat() for d in upcoming))
             return 0
         for fixture in FIXTURES:
             state = simulator.state_of(fixture.match_id)

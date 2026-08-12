@@ -1,11 +1,13 @@
 """Where the sandbox gets its fixture list from.
 
-Three interchangeable providers:
+Four interchangeable providers:
 
-* ``synthetic``  – the original generated fixtures, always available offline;
-* ``openliga``   – the real schedule from OpenLigaDB, a free open-data API that
+* ``synthetic``    – the original generated fixtures, always available offline;
+* ``openliga``     – the real schedule from OpenLigaDB, a free open-data API that
   needs no key and whose data is explicitly published for reuse;
-* ``file``       – your own JSON file, so you can hand-write any fixture list.
+* ``footballdata`` – the real schedule from footballdata.io (needs an API key in
+  ``FOOTBALLDATA_API_KEY``); covers 1200+ leagues worldwide;
+* ``file``         – your own JSON file, so you can hand-write any fixture list.
 
 Only the *schedule, past results and team names* are real. Live minute-by-minute
 statistics and the bookmaker prices are still simulated locally: nothing in this
@@ -28,7 +30,10 @@ log = logging.getLogger("mocksite.fixtures")
 
 CACHE_DIR = Path(os.environ.get("MOCK_CACHE_DIR", Path(__file__).resolve().parent.parent / ".cache"))
 OPENLIGA_BASE = "https://api.openligadb.de"
+FOOTBALLDATA_BASE = "https://footballdata.io/api/v1"
 HTTP_TIMEOUT_S = 20
+#: Plain, honest identification of this client – no browser spoofing.
+USER_AGENT = "betting-sandbox/1.0 (educational local sandbox)"
 #: How many past seasons are pulled in to build H2H history and team strengths.
 HISTORY_SEASONS = 3
 LEAGUE_AVG_GOALS_PER_TEAM = 1.45
@@ -54,6 +59,10 @@ class Fixture:
     away: str
     kickoff_utc: datetime
     competition: str = ""
+    #: Status reported by the data provider (``""`` when it does not report one).
+    #: Only used to keep already finished or cancelled matches out of the live
+    #: offer; the running clock still decides when a match goes live.
+    provider_status: str = ""
     home_attack: float = LEAGUE_AVG_GOALS_PER_TEAM
     home_defence: float = LEAGUE_AVG_GOALS_PER_TEAM
     away_attack: float = LEAGUE_AVG_GOALS_PER_TEAM
@@ -68,7 +77,12 @@ class Fixture:
 # ---------------------------------------------------------------------------
 # HTTP with an on-disk cache (one request per league-season per day at most)
 # ---------------------------------------------------------------------------
-def _cached_get_json(url: str, cache_key: str, max_age_s: float = 3600.0):
+def _cached_get_json(
+    url: str,
+    cache_key: str,
+    max_age_s: float = 3600.0,
+    headers: dict[str, str] | None = None,
+):
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache_file = CACHE_DIR / f"{cache_key}.json"
     if cache_file.exists():
@@ -76,9 +90,23 @@ def _cached_get_json(url: str, cache_key: str, max_age_s: float = 3600.0):
         if age < max_age_s:
             return json.loads(cache_file.read_text(encoding="utf-8"))
 
-    request = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_S) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json", "User-Agent": USER_AGENT, **(headers or {})},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_S) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        # API errors carry a JSON body with a readable message; keep it.
+        body = error.read().decode("utf-8", "replace")
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            raise
+        if payload.get("success") is not False:
+            raise
+        return payload  # deliberately not cached
     cache_file.write_text(json.dumps(payload), encoding="utf-8")
     return payload
 
@@ -180,6 +208,147 @@ def load_openligadb(league: str, on_date: date, seasons_back: int = HISTORY_SEAS
     return sorted(fixtures, key=lambda f: f.kickoff_utc)
 
 
+# ---------------------------------------------------------------------------
+# footballdata.io
+# ---------------------------------------------------------------------------
+#: Statuses that mean the match will not be played (again) today.
+FD_DEAD_STATUSES = frozenset({"complete", "canceled", "cancelled", "postponed", "abandoned"})
+
+
+def footballdata_key() -> str:
+    key = os.environ.get("FOOTBALLDATA_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError(
+            "Chýba FOOTBALLDATA_API_KEY – nastav premennú prostredia s kľúčom z footballdata.io"
+        )
+    return key
+
+
+def _footballdata_get(path: str, cache_key: str, max_age_s: float) -> dict:
+    payload = _cached_get_json(
+        f"{FOOTBALLDATA_BASE}/{path}",
+        cache_key=cache_key,
+        max_age_s=max_age_s,
+        headers={"Authorization": f"Bearer {footballdata_key()}"},
+    )
+    if not payload.get("success"):
+        error = payload.get("error") or {}
+        raise RuntimeError(f"footballdata.io: {error.get('message', 'neznáma chyba')}")
+    return payload["data"]
+
+
+def _footballdata_h2h(home_id: int, away_id: int, home: str, away: str) -> list[H2HMatch]:
+    """Real head-to-head results for one pairing (one request, cached for a day)."""
+    try:
+        data = _footballdata_get(
+            f"teams/{home_id}/h2h/{away_id}?limit=10",
+            cache_key=f"footballdata-h2h-{home_id}-{away_id}",
+            max_age_s=24 * 3600,
+        )
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, RuntimeError) as exc:
+        log.warning("footballdata.io H2H %s vs %s nedostupné: %s", home, away, exc)
+        return []
+
+    h2h: list[H2HMatch] = []
+    for match in data.get("matches", []):
+        score = match.get("score") or {}
+        if match.get("status") != "complete" or score.get("home") is None:
+            continue
+        h2h.append(
+            H2HMatch(
+                played_on=datetime.strptime(match["match_date"], "%Y-%m-%d %H:%M:%S").date(),
+                home=match["home_team"]["team_name"],
+                away=match["away_team"]["team_name"],
+                home_goals=int(score["home"]),
+                away_goals=int(score["away"]),
+            )
+        )
+    return h2h
+
+
+def _fixture_from_footballdata(match: dict, with_h2h: bool) -> Fixture:
+    home_team, away_team = match["home_team"], match["away_team"]
+    home, away = home_team["team_name"], away_team["team_name"]
+    # Pre-match xG is the provider's own expected-goals estimate, which is exactly
+    # the lambda the local Poisson simulator needs.
+    prematch = (match.get("xg") or {}).get("prematch") or {}
+    lam_home = float(prematch.get("home") or LEAGUE_AVG_GOALS_PER_TEAM)
+    lam_away = float(prematch.get("away") or LEAGUE_AVG_GOALS_PER_TEAM)
+    h2h = (
+        _footballdata_h2h(home_team["team_id"], away_team["team_id"], home, away)
+        if with_h2h
+        else []
+    )
+    return Fixture(
+        match_id=f"m{match['match_id']}",
+        home=home,
+        away=away,
+        kickoff_utc=datetime.fromtimestamp(int(match["date_unix"]), tz=timezone.utc),
+        competition=(match.get("league") or {}).get("name", ""),
+        provider_status=str(match.get("status", "")),
+        # simulator: lam_home = (home_attack + away_defence) / 2, and vice versa.
+        home_attack=lam_home,
+        away_defence=lam_home,
+        away_attack=lam_away,
+        home_defence=lam_away,
+        h2h=h2h,
+    )
+
+
+def load_footballdata(
+    on_date: date, league: str | None = None, max_fixtures: int = 20
+) -> list[Fixture]:
+    """Real schedule for one day from footballdata.io.
+
+    ``league`` filters by numeric ``league_id`` or by a case-insensitive part of
+    the league name (e.g. ``"Premier League"``). H2H history is fetched per
+    fixture, so the fixture count is capped to keep the request budget sane.
+    """
+    today = date.today()
+    path = "fixtures/today?limit=100" if on_date == today else f"matches/date/{on_date}?limit=100"
+    data = _footballdata_get(
+        path,
+        cache_key=f"footballdata-day-{on_date}",
+        # Today's list carries the live status, so keep it fresh.
+        max_age_s=120 if on_date == today else 12 * 3600,
+    )
+
+    matches = data.get("matches", [])
+    if league:
+        wanted = league.strip().lower()
+        matches = [
+            match
+            for match in matches
+            if wanted in {str((match.get("league") or {}).get("league_id"))}
+            or wanted in str((match.get("league") or {}).get("name", "")).lower()
+        ]
+    matches = [m for m in matches if str(m.get("status", "")) not in FD_DEAD_STATUSES]
+    matches.sort(key=lambda match: int(match["date_unix"]))
+
+    return [
+        _fixture_from_footballdata(match, with_h2h=index < max_fixtures)
+        for index, match in enumerate(matches)
+    ]
+
+
+def footballdata_matchdays(limit: int = 10) -> list[date]:
+    """Days with upcoming fixtures, useful when today's list is empty."""
+    try:
+        data = _footballdata_get(
+            "fixtures/upcoming?limit=100",
+            cache_key="footballdata-upcoming",
+            max_age_s=3600,
+        )
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, RuntimeError) as exc:
+        log.warning("footballdata.io upcoming nedostupné: %s", exc)
+        return []
+    days = {
+        datetime.fromtimestamp(int(match["date_unix"]), tz=timezone.utc).astimezone().date()
+        for match in data.get("matches", [])
+    }
+    return sorted(days)[:limit]
+
+
 def load_json_file(path: Path) -> list[Fixture]:
     """Fixtures from your own JSON file.
 
@@ -270,17 +439,29 @@ def load_fixtures(
 ) -> list[Fixture]:
     """Pick a provider from the arguments or the environment.
 
-    ``MOCK_FIXTURES=synthetic|openliga|/path/to/file.json``
+    ``MOCK_FIXTURES=synthetic|openliga|footballdata|/path/to/file.json``
     ``MOCK_LEAGUE=bl1`` ``MOCK_DATE=2026-08-29``
     """
     source = source or os.environ.get("MOCK_FIXTURES", "synthetic")
-    league = league or os.environ.get("MOCK_LEAGUE", "bl1")
     if on_date is None:
         raw_date = os.environ.get("MOCK_DATE")
         on_date = date.fromisoformat(raw_date) if raw_date else date.today()
 
     if source == "synthetic":
         return load_synthetic(on_date)
+    if source == "footballdata":
+        # No league filter by default: footballdata.io covers 1200+ competitions.
+        wanted = league if league is not None else os.environ.get("MOCK_LEAGUE", "")
+        fixtures = load_footballdata(on_date, wanted)
+        if not fixtures:
+            log.warning(
+                "footballdata.io: na %s%s nie sú žiadne (ešte nehrané) zápasy.",
+                on_date,
+                f" v lige {wanted!r}" if wanted else "",
+            )
+        return fixtures
+
+    league = league or os.environ.get("MOCK_LEAGUE", "bl1")
     if source == "openliga":
         fixtures = load_openligadb(league, on_date)
         if not fixtures:

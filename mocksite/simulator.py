@@ -29,7 +29,10 @@ import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
-from .fixtures_source import Fixture
+from .fixtures_source import FD_DEAD_STATUSES, Fixture
+
+#: Provider statuses that override the clock: the match is not going to run.
+DEAD_PROVIDER_STATUSES = FD_DEAD_STATUSES
 
 MATCH_MINUTES = 90
 #: Wall-clock length of a match in ``real`` mode, including the half-time break.
@@ -163,6 +166,9 @@ def rebuild_timelines() -> None:
 def _elapsed_minutes(fixture: Fixture, now: float | None = None) -> tuple[int, str]:
     """Current match minute and status for one fixture."""
     now = now or time.time()
+    if fixture.provider_status in DEAD_PROVIDER_STATUSES:
+        # The data provider already reported the match as over/called off.
+        return MATCH_MINUTES, FINISHED
     if clock_mode() == "demo":
         minute = (now - _SERVER_START) * minutes_per_second()
         if minute >= MATCH_MINUTES:

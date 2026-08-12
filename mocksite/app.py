@@ -15,13 +15,14 @@ import os
 from flask import Blueprint, Flask, jsonify, render_template, request
 
 from . import simulator
-from .data import FIXTURES, FIXTURES_BY_ID
+from .data import FIXTURES, FIXTURES_BY_ID, refresh_if_stale
 
 livescore = Blueprint("livescore", __name__, url_prefix="/livescore")
 bookmaker = Blueprint("bookmaker", __name__, url_prefix="/book")
 
 
 def _rows(live_only: bool = False):
+    refresh_if_stale()
     rows = [(fixture, simulator.state_of(fixture.match_id)) for fixture in FIXTURES]
     return [row for row in rows if row[1].is_live] if live_only else rows
 
