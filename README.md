@@ -138,7 +138,7 @@ nenahradí – `fixtures` vypíše najbližšie hracie dni.
 
 ```
 mocksite/           lokálne simulované stránky
-  fixtures_source.py zdroje rozpisu: OpenLigaDB / vlastný JSON / syntetický
+  fixtures_source.py zdroje rozpisu: footballdata.io / OpenLigaDB / vlastný JSON / syntetický
   data.py           aktuálne načítaný rozpis (FIXTURES) + reload
   simulator.py      stav zápasu (scheduled/live/finished), časová os + kurzy s maržou
   app.py            Flask: /livescore a /book
