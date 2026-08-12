@@ -110,6 +110,15 @@ Odpovede sú cachované (dnešný rozpis 2 min, H2H 24 h) a H2H sa ťahá najvia
 obnoví každých `MOCK_REFRESH_S` sekúnd (default 300, `0` vypne).
 Už odohrané / zrušené / odložené zápasy sa do rozpisu neberú.
 
+Ak Windows hlási `CERTIFICATE_VERIFY_FAILED`, aktualizuj závislosť:
+
+```powershell
+python -m pip install --upgrade certifi
+```
+
+Pri firemnom proxy treba namiesto vypínania SSL overenia nastaviť PEM certifikát:
+`$env:FOOTBALLDATA_CA_BUNDLE = "C:\cesta\k\proxy.pem"`.
+
 ### Režim hodín
 
 - `--clock real` (default) – zápas je `live` iba v reálnom okne od výkopu do

@@ -19,12 +19,15 @@ from __future__ import annotations
 import json
 import logging
 import os
+import ssl
 import urllib.error
 import urllib.request
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+import certifi
 
 from .env_file import ENV_FILE, load_env_file
 
@@ -36,6 +39,7 @@ FOOTBALLDATA_BASE = "https://footballdata.io/api/v1"
 HTTP_TIMEOUT_S = 20
 #: Plain, honest identification of this client – no browser spoofing.
 USER_AGENT = "betting-sandbox/1.0 (educational local sandbox)"
+CA_BUNDLE_ENV = "FOOTBALLDATA_CA_BUNDLE"
 #: How many past seasons are pulled in to build H2H history and team strengths.
 HISTORY_SEASONS = 3
 LEAGUE_AVG_GOALS_PER_TEAM = 1.45
@@ -96,9 +100,25 @@ def _cached_get_json(
         url,
         headers={"Accept": "application/json", "User-Agent": USER_AGENT, **(headers or {})},
     )
+    ca_bundle = os.environ.get(CA_BUNDLE_ENV, "").strip()
+    context = ssl.create_default_context(cafile=ca_bundle or certifi.where())
     try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_S) as response:
+        with urllib.request.urlopen(
+            request,
+            timeout=HTTP_TIMEOUT_S,
+            context=context,
+        ) as response:
             payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.URLError as error:
+        if isinstance(error.reason, Exception) and "CERTIFICATE_VERIFY_FAILED" in str(
+            error.reason
+        ):
+            raise RuntimeError(
+                "SSL certifikát footballdata.io sa nedá overiť. "
+                "Aktualizuj Python certifikáty alebo nastav "
+                f"{CA_BUNDLE_ENV} na PEM certifikát firemného proxy."
+            ) from error
+        raise
     except urllib.error.HTTPError as error:
         # API errors carry a JSON body with a readable message; keep it.
         body = error.read().decode("utf-8", "replace")
