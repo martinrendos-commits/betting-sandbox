@@ -109,26 +109,29 @@ def _cached_get_json(
             context=context,
         ) as response:
             payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        # HTTPError must be handled before URLError: it is a subclass of it.
+        body = error.read().decode("utf-8", "replace")
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            # Not the API talking – usually a proxy or WAF in the way.
+            raise RuntimeError(
+                f"{url} odpovedalo HTTP {error.code} ({error.reason}) a odpoveď nie je "
+                f"JSON od API – pravdepodobne ju zablokoval proxy/firewall. "
+                f"Začiatok odpovede: {body[:200]!r}"
+            ) from error
+        if payload.get("success") is not False:
+            raise
+        return payload  # deliberately not cached
     except urllib.error.URLError as error:
-        if isinstance(error.reason, Exception) and "CERTIFICATE_VERIFY_FAILED" in str(
-            error.reason
-        ):
+        if "CERTIFICATE_VERIFY_FAILED" in str(error.reason):
             raise RuntimeError(
                 "SSL certifikát footballdata.io sa nedá overiť. "
                 "Aktualizuj Python certifikáty alebo nastav "
                 f"{CA_BUNDLE_ENV} na PEM certifikát firemného proxy."
             ) from error
         raise
-    except urllib.error.HTTPError as error:
-        # API errors carry a JSON body with a readable message; keep it.
-        body = error.read().decode("utf-8", "replace")
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError:
-            raise
-        if payload.get("success") is not False:
-            raise
-        return payload  # deliberately not cached
     cache_file.write_text(json.dumps(payload), encoding="utf-8")
     return payload
 
