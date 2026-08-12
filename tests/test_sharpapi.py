@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from email.message import Message
 from io import BytesIO
+import re
 from urllib.error import HTTPError
 
 from mocksite import sharpapi_source
@@ -204,3 +205,76 @@ def test_match_detail_uses_sharpapi_rows_when_linked(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert "draftkings" in body
     assert "SharpAPI" in body
+
+
+def test_index_shows_best_sharpapi_1x2_and_dash_when_absent(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOCK_DB_PATH", str(tmp_path / "sharp.sqlite3"))
+    monkeypatch.setenv("SHARPAPI_DISABLED", "true")
+    monkeypatch.setenv("MOCK_CLOCK", "demo")
+    monkeypatch.setenv("MOCK_FIXTURES", "synthetic")
+    from dataclasses import replace
+    from mocksite import app as app_module, simulator
+    from mocksite.data import FIXTURES
+
+    live_state = simulator.state_of("m1")
+    upcoming_state = replace(live_state, status=simulator.SCHEDULED)
+    monkeypatch.setattr(
+        app_module,
+        "_rows",
+        lambda live_only=False: [
+            (FIXTURES[0], live_state),
+            (FIXTURES[1], upcoming_state),
+        ],
+    )
+    store_sharp_events([{"id": "sharp-index", "sport": "soccer", "home_team": "Slovan", "away_team": "Trnava"}])
+    from mocksite.store import store_sharp_event_link
+
+    store_sharp_event_link("sharp-index", "m1", 1.0)
+    store_sharp_odds(
+        [
+            {"event_id": "sharp-index", "sportsbook": "fanduel", "market_type": "moneyline", "selection": "Home FC", "odds_decimal": 2.1, "market_concept": "1x2", "selection_key": "home"},
+            {"event_id": "sharp-index", "sportsbook": "draftkings", "market_type": "moneyline", "selection": "Home FC", "odds_decimal": 2.4, "market_concept": "1x2", "selection_key": "home"},
+        ]
+    )
+    body = create_app().test_client().get("/").get_data(as_text=True)
+    assert 'data-field="sharpapi-odds"' in body
+    assert "2.4 (draftkings)" in body
+    assert 'data-selection="draw">–' in body
+    rows = re.findall(r'<tr data-testid="match-row".*?</tr>', body, flags=re.DOTALL)
+    assert len(rows) == 2
+    assert all(row.count("<td") == 5 for row in rows)
+
+    monkeypatch.setenv("MOCK_DB_PATH", str(tmp_path / "empty.sqlite3"))
+    body = create_app().test_client().get("/").get_data(as_text=True)
+    assert 'data-selection="home">–' in body
+
+
+def test_sharp_status_reports_counts_and_unlinked(monkeypatch, capsys):
+    monkeypatch.setenv("MOCK_FIXTURES", "synthetic")
+    monkeypatch.setenv("SHARPAPI_DISABLED", "true")
+    from sandbox_bot.cli import main
+
+    assert main(["sharp", "status"]) == 0
+    output = capsys.readouterr().out
+    assert "Databáza:" in output
+    assert "Zobrazené fixture:" in output
+
+
+def test_match_detail_skips_refresh_when_rate_budget_is_full(tmp_path, monkeypatch):
+    monkeypatch.setenv("MOCK_DB_PATH", str(tmp_path / "sharp.sqlite3"))
+    monkeypatch.setenv("SHARPAPI_DISABLED", "false")
+    from mocksite import app as app_module
+
+    monkeypatch.setattr(app_module, "_start_refresh_worker", lambda app: None)
+    monkeypatch.setattr(app_module, "sharpapi_enabled", lambda: True)
+    monkeypatch.setattr(app_module, "sharpapi_request_available", lambda requests=1: False)
+    refreshed = []
+    monkeypatch.setattr(
+        app_module,
+        "refresh_for_fixtures",
+        lambda fixtures, limit=10: refreshed.append((fixtures, limit)),
+    )
+
+    response = create_app().test_client().get("/livescore/match/m1")
+    assert response.status_code == 200
+    assert refreshed == []

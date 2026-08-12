@@ -13,8 +13,9 @@ from __future__ import annotations
 import os
 import threading
 import time
+from datetime import datetime, timezone
 
-from flask import Blueprint, Flask, jsonify, render_template, request
+from flask import Blueprint, Flask, current_app, jsonify, render_template, request
 from sandbox_bot.ratings import fair_odds_for_fixture
 
 from . import simulator
@@ -29,8 +30,20 @@ from .data import (
     refresh_live_data,
     refresh_remote_data,
 )
-from .store import latest_match_events, latest_match_stats, latest_sharp_odds, sharp_event_id_for_match
-from .sharpapi_source import SharpAPIError, refresh_for_fixtures, sharpapi_enabled, sharpapi_status
+from .store import (
+    latest_match_events,
+    latest_match_stats,
+    latest_sharp_odds,
+    latest_sharp_odds_for_matches,
+    sharp_event_id_for_match,
+)
+from .sharpapi_source import (
+    SharpAPIError,
+    refresh_for_fixtures,
+    sharpapi_enabled,
+    sharpapi_request_available,
+    sharpapi_status,
+)
 
 livescore = Blueprint("livescore", __name__, url_prefix="/livescore")
 bookmaker = Blueprint("bookmaker", __name__, url_prefix="/book")
@@ -167,6 +180,32 @@ def _sharp_odds_details(match_id: str):
     return {"source": "sharpapi", "rows": main, "stored_count": len(odds), "other_count": other_count, "event_id": event_id}
 
 
+def _sharp_index_odds(match_ids: list[str]) -> dict[str, dict[str, dict[str, object]]]:
+    stored = latest_sharp_odds_for_matches(match_ids)
+    result: dict[str, dict[str, dict[str, object]]] = {}
+    for match_id, rows in stored.items():
+        best: dict[str, dict[str, object]] = {}
+        for row in rows:
+            market = row.get("market_concept") or {
+                "moneyline": "1x2",
+                "total_goals": "over_under",
+            }.get(str(row.get("market_type") or "").casefold())
+            selection = row.get("selection_key") or str(row.get("selection") or "").casefold()
+            if market != "1x2" or selection not in {"home", "draw", "away"}:
+                continue
+            price = row.get("odds_decimal")
+            if price is None:
+                continue
+            current = best.get(str(selection))
+            if current is None or float(price) > float(current["odds"]):
+                best[str(selection)] = {
+                    "odds": price,
+                    "sportsbook": row.get("sportsbook") or "–",
+                }
+        result[match_id] = best
+    return result
+
+
 def _start_refresh_worker(app: Flask) -> None:
     source = os.environ.get("MOCK_FIXTURES", "synthetic")
     if source not in REMOTE_SOURCES and not sharpapi_enabled():
@@ -231,9 +270,11 @@ def _start_refresh_worker(app: Flask) -> None:
 
 @livescore.get("/")
 def match_list():
+    rows = _rows(live_only=request.args.get("live") == "1")
     return render_template(
         "livescore_list.html",
-        rows=_rows(live_only=request.args.get("live") == "1"),
+        rows=rows,
+        sharp_index_odds=_sharp_index_odds([fixture.match_id for fixture, _ in rows]),
         live_filter=request.args.get("live") == "1",
     )
 
@@ -244,6 +285,26 @@ def match_detail(match_id: str):
     state = simulator.state_of(match_id)
     if match_id in PROVIDER_LIVE_FIXTURES:
         state = _provider_state(match_id, state)
+    if sharpapi_enabled():
+        stored = latest_sharp_odds_for_matches([match_id]).get(match_id, [])
+        freshest = max((str(row.get("fetched_at") or "") for row in stored), default="")
+        try:
+            fetched_at = datetime.fromisoformat(freshest) if freshest else None
+        except ValueError:
+            fetched_at = None
+        refresh_seconds = float(os.environ.get("SHARPAPI_REFRESH_S", "60"))
+        fresh = fetched_at is not None and (
+            datetime.now(timezone.utc) - fetched_at
+        ).total_seconds() < refresh_seconds
+        if not fresh and sharpapi_request_available(4):
+            try:
+                refresh_for_fixtures([fixture], limit=1)
+            except SharpAPIError as exc:
+                current_app.logger.info("SharpAPI detail refresh zlyhal: %s", exc)
+        elif not fresh:
+            current_app.logger.info(
+                "SharpAPI detail refresh preskožený: limit požiadaviek je plný."
+            )
     fair_odds, fair_odds_fallback = fair_odds_for_fixture(fixture)
     return render_template(
         "livescore_detail.html",
@@ -317,6 +378,9 @@ def create_app() -> Flask:
             "index.html",
             live_rows=live_rows,
             upcoming_rows=upcoming_rows[:50],
+            sharp_index_odds=_sharp_index_odds(
+                [fixture.match_id for fixture, _ in live_rows + upcoming_rows[:50]]
+            ),
             clock_mode=simulator.clock_mode(),
             source=os.environ.get("MOCK_FIXTURES", "synthetic"),
         )

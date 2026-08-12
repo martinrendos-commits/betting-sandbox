@@ -8,7 +8,7 @@
 </p>
 <table data-testid="match-table">
   <thead>
-    <tr><th>Výkop</th><th>Domáci</th><th>Hostia</th><th>Skóre</th><th>Minúta</th><th>Stav</th><th></th></tr>
+    <tr><th>Výkop</th><th>Domáci</th><th>Hostia</th><th>Skóre</th><th>Minúta</th><th>Stav</th><th>SharpAPI 1X2</th><th></th></tr>
   </thead>
   <tbody>
   {% for fixture, state in rows %}
@@ -19,10 +19,16 @@
       <td data-field="score">{{ state.home_goals }}:{{ state.away_goals }}</td>
       <td data-field="minute">{{ state.minute }}'</td>
       <td><span class="badge" data-field="status">{{ state.status }}</span></td>
+      <td data-field="sharpapi-odds">
+        {% set odds = sharp_index_odds.get(fixture.match_id, {}) %}
+        {% for selection in ("home", "draw", "away") %}
+          {% if odds.get(selection) %}<span data-selection="{{ selection }}">{{ selection }} {{ odds[selection].odds }} ({{ odds[selection].sportsbook }})</span>{% else %}<span data-selection="{{ selection }}">–</span>{% endif %}{% if not loop.last %}<br>{% endif %}
+        {% endfor %}
+      </td>
       <td><a data-testid="match-link" href="/livescore/match/{{ fixture.match_id }}">detail</a></td>
     </tr>
   {% else %}
-    <tr><td colspan="7" data-testid="no-matches">Žiadne zápasy pre zvolený deň a ligu.</td></tr>
+    <tr><td colspan="8" data-testid="no-matches">Žiadne zápasy pre zvolený deň a ligu.</td></tr>
   {% endfor %}
   </tbody>
 </table>

@@ -83,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     sharp_sub = sharp.add_subparsers(dest="sharp_command", required=True)
     for name in ("account", "sports", "leagues", "books", "markets"):
         sharp_sub.add_parser(name)
+    sharp_sub.add_parser("status")
     sharp_events = sharp_sub.add_parser("events")
     sharp_events.add_argument("--league", default="")
     sharp_events.add_argument("--live", action="store_true")
@@ -128,7 +129,38 @@ def main(argv: list[str] | None = None) -> int:
         from mocksite import sharpapi_source
 
         try:
-            if args.sharp_command == "account":
+            if args.sharp_command == "status":
+                from mocksite.data import FIXTURES, PROVIDER_LIVE_FIXTURES, PROVIDER_UPCOMING_FIXTURES, refresh_if_stale
+
+                refresh_if_stale()
+                payload = sharpapi_source.account() if sharpapi_source.sharpapi_enabled() else {}
+                data = payload.get("data") or {}
+                with connect() as connection:
+                    counts = {
+                        table: connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                        for table in ("sharp_events", "sharp_odds_snapshots", "sharp_event_links")
+                    }
+                    last_payload = connection.execute(
+                        "SELECT fetched_at FROM api_payloads WHERE source='sharpapi' ORDER BY payload_id DESC LIMIT 1"
+                    ).fetchone()
+                    linked = {
+                        str(row[0])
+                        for row in connection.execute("SELECT match_id FROM sharp_event_links")
+                    }
+                displayed = list(FIXTURES) + list(PROVIDER_UPCOMING_FIXTURES.values()) + list(PROVIDER_LIVE_FIXTURES.values())
+                displayed_by_id = {fixture.match_id: fixture for fixture in displayed}
+                unlinked = [fixture for match_id, fixture in displayed_by_id.items() if match_id not in linked]
+                print(f"SharpAPI: {sharpapi_source.sharpapi_status()}")
+                print(f"Účet: plán={data.get('tier', '–')}, limity={data.get('rate_limit', data.get('limits', '–'))}")
+                print(f"Databáza: sharp_events={counts['sharp_events']}, sharp_odds_snapshots={counts['sharp_odds_snapshots']}, sharp_event_links={counts['sharp_event_links']}")
+                print(f"Posledný SharpAPI payload: {last_payload[0] if last_payload else '–'}")
+                print(f"Zobrazené fixture: spárované={len(displayed_by_id) - len(unlinked)}, nespárované={len(unlinked)}")
+                if unlinked:
+                    print("Nespárované zápasy:")
+                    for fixture in unlinked:
+                        print(f"- {fixture.home} – {fixture.away} ({fixture.competition or '–'})")
+                return 0
+            elif args.sharp_command == "account":
                 payload = sharpapi_source.account()
             elif args.sharp_command == "sports":
                 payload = sharpapi_source.sports()

@@ -469,6 +469,33 @@ def latest_sharp_odds(event_id: str | None = None) -> list[dict]:
     return [dict(zip(keys, row)) for row in rows]
 
 
+def latest_sharp_odds_for_matches(match_ids: list[str]) -> dict[str, list[dict]]:
+    if not match_ids:
+        return {}
+    placeholders = ",".join("?" for _ in match_ids)
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT l.match_id, o.event_id, o.sportsbook, o.market_type, o.selection, "
+            "o.odds_decimal, o.odds_american, o.odds_probability, o.is_live, o.timestamp, "
+            "o.fetched_at, o.line, o.market_concept, o.selection_key, o.is_player_prop "
+            "FROM sharp_event_links l JOIN sharp_odds_snapshots o ON o.event_id = l.event_id "
+            "JOIN (SELECT event_id, max(fetched_at) AS fetched_at FROM sharp_odds_snapshots "
+            "GROUP BY event_id) latest ON latest.event_id = o.event_id AND latest.fetched_at = o.fetched_at "
+            f"WHERE l.match_id IN ({placeholders}) ORDER BY l.match_id, o.market_type, o.sportsbook, o.selection",
+            match_ids,
+        ).fetchall()
+    keys = (
+        "match_id", "event_id", "sportsbook", "market_type", "selection",
+        "odds_decimal", "odds_american", "odds_probability", "is_live",
+        "timestamp", "fetched_at", "line", "market_concept", "selection_key", "is_player_prop",
+    )
+    result: dict[str, list[dict]] = {}
+    for row in rows:
+        item = dict(zip(keys, row))
+        result.setdefault(str(item["match_id"]), []).append(item)
+    return result
+
+
 def sharp_event_id_for_match(match_id: str) -> str | None:
     with connect() as connection:
         row = connection.execute(

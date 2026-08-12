@@ -19,7 +19,7 @@
 <section class="card" data-testid="{{ testid }}">
   <h3>{{ title }} ({{ rows|length }})</h3>
   <table data-testid="{{ testid }}-table">
-    <thead><tr><th>Výkop</th><th>Zápas</th><th>Skóre</th><th>Stav</th></tr></thead>
+    <thead><tr><th>Výkop</th><th>Zápas</th><th>Skóre</th><th>Stav</th><th>SharpAPI 1X2</th></tr></thead>
     <tbody>
     {% for fixture, state in rows %}
       <tr data-testid="match-row" data-match-id="{{ fixture.match_id }}" data-status="{{ state.status }}">
@@ -33,9 +33,15 @@
         </td>
         <td>{{ state.home_goals }}:{{ state.away_goals }}</td>
         <td><span class="badge">{{ state.status }}</span></td>
+        <td data-field="sharpapi-odds">
+          {% set odds = sharp_index_odds.get(fixture.match_id, {}) %}
+          {% for selection in ("home", "draw", "away") %}
+            <span data-selection="{{ selection }}">{% if odds.get(selection) %}{{ selection }} {{ odds[selection].odds }} ({{ odds[selection].sportsbook }}){% else %}–{% endif %}</span>{% if not loop.last %}<br>{% endif %}
+          {% endfor %}
+        </td>
       </tr>
     {% else %}
-      <tr><td colspan="4">{{ empty_text }}</td></tr>
+      <tr><td colspan="5">{{ empty_text }}</td></tr>
     {% endfor %}
     </tbody>
   </table>

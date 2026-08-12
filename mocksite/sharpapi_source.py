@@ -89,6 +89,13 @@ def _wait_for_rate_limit() -> None:
         _REQUEST_TIMES.append(time.monotonic())
 
 
+def sharpapi_request_available(requests: int = 1) -> bool:
+    with _LIMITER_LOCK:
+        now = time.monotonic()
+        _REQUEST_TIMES[:] = [stamp for stamp in _REQUEST_TIMES if now - stamp < 60.0]
+        return len(_REQUEST_TIMES) + requests <= _account_limit()
+
+
 def _account_limit() -> int:
     if _SERVER_LIMIT is not None and _SERVER_LIMIT > 0:
         return _SERVER_LIMIT
