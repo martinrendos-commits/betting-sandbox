@@ -23,7 +23,7 @@
     <tbody>
     {% for fixture, state in rows %}
       <tr data-testid="match-row" data-match-id="{{ fixture.match_id }}" data-status="{{ state.status }}">
-        <td>{{ fixture.kickoff }}</td>
+        <td>{{ fixture.kickoff_display }}</td>
         <td>
           {% if state.is_live %}
           <a data-testid="match-link" href="/livescore/match/{{ fixture.match_id }}">{{ fixture.home }} – {{ fixture.away }}</a>

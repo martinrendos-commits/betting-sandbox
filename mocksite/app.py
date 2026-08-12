@@ -21,6 +21,7 @@ from .data import (
     FIXTURES,
     PROVIDER_LIVE_FIXTURES,
     PROVIDER_LIVE_PAYLOADS,
+    PROVIDER_UPCOMING_FIXTURES,
     REMOTE_SOURCES,
     fixture_for_id,
     refresh_if_stale,
@@ -39,6 +40,9 @@ def _rows(live_only: bool = False):
         fixture.match_id: (fixture, simulator.state_of(fixture.match_id))
         for fixture in FIXTURES
     }
+    for match_id, fixture in PROVIDER_UPCOMING_FIXTURES.items():
+        simulator.ensure_timeline(fixture)
+        rows_by_id[match_id] = (fixture, simulator.state_of(match_id))
     provider_rows = []
     for match_id, fixture in PROVIDER_LIVE_FIXTURES.items():
         provider_rows.append((fixture, _provider_state(match_id, simulator.state_of(match_id))))
@@ -97,7 +101,7 @@ STAT_LABELS = {
     "fouls": "Fauly",
     "throwins": "Vhadzovania",
     "free_kicks": "Voľné kopy",
-    "goal_kicks": "Odkope od brány",
+    "goal_kicks": "Odkopy od brány",
     "penalties_won": "Vybojované penalty",
     "penalty_goals": "Góly z penalty",
     "penalty_missed": "Nepremenené penalty",
@@ -262,10 +266,11 @@ def create_app() -> Flask:
         else:
             live_rows = [row for row in rows if row[1].is_live]
         upcoming_rows = [row for row in rows if row[1].status == simulator.SCHEDULED]
+        upcoming_rows.sort(key=lambda row: row[0].kickoff_utc)
         return render_template(
             "index.html",
             live_rows=live_rows,
-            upcoming_rows=upcoming_rows,
+            upcoming_rows=upcoming_rows[:50],
             clock_mode=simulator.clock_mode(),
             source=os.environ.get("MOCK_FIXTURES", "synthetic"),
         )

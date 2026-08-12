@@ -79,6 +79,15 @@ class Fixture:
     def kickoff(self) -> str:
         return self.kickoff_utc.astimezone().strftime("%H:%M")
 
+    @property
+    def kickoff_display(self) -> str:
+        """Show the date too when a fixture is not scheduled for today."""
+        local_kickoff = self.kickoff_utc.astimezone()
+        today = datetime.now().astimezone().date()
+        if local_kickoff.date() == today:
+            return local_kickoff.strftime("%H:%M")
+        return local_kickoff.strftime("%d.%m.%Y %H:%M")
+
 
 # ---------------------------------------------------------------------------
 # HTTP with an on-disk cache (one request per league-season per day at most)
@@ -308,6 +317,31 @@ def load_footballdata_results(limit: int = 100) -> int:
     except Exception as exc:
         log.warning("Uloženie footballdata výsledkov zlyhalo: %s", exc)
         return 0
+
+
+def load_footballdata_upcoming(limit: int = 100) -> list[Fixture]:
+    """Fetch, persist and normalize the provider's future fixture feed."""
+    data = _footballdata_get(
+        f"fixtures/upcoming?limit={limit}",
+        cache_key="footballdata-upcoming",
+        max_age_s=600,
+    )
+    matches = list(data.get("matches", []))[:limit]
+    from .store import store_match_payloads
+
+    try:
+        store_match_payloads(matches, source="footballdata")
+    except Exception as exc:
+        log.warning("Uloženie nadchádzajúcich zápasov zlyhalo: %s", exc)
+    fixtures: list[Fixture] = []
+    for match in matches:
+        if str(match.get("status", "")) in FD_DEAD_STATUSES:
+            continue
+        try:
+            fixtures.append(_fixture_from_footballdata(match, with_h2h=False))
+        except (KeyError, TypeError, ValueError) as exc:
+            log.warning("Nadchádzajúci zápas sa nedá spracovať: %s", exc)
+    return sorted(fixtures, key=lambda fixture: fixture.kickoff_utc)
 
 
 def load_footballdata_live(max_matches: int = 20) -> list[dict]:

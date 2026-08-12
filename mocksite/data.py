@@ -46,6 +46,7 @@ FIXTURES: list[Fixture] = []
 FIXTURES_BY_ID: dict[str, Fixture] = {}
 PROVIDER_LIVE_FIXTURES: dict[str, Fixture] = {}
 PROVIDER_LIVE_PAYLOADS: dict[str, dict] = {}
+PROVIDER_UPCOMING_FIXTURES: dict[str, Fixture] = {}
 _LAST_LOAD = 0.0
 _REFRESH_LOCK = threading.Lock()
 #: Providers whose schedule/status can change while the server runs.
@@ -63,6 +64,15 @@ def reload_fixtures(
     global _LAST_LOAD
 
     fixtures = load_fixtures(source, league=league, on_date=on_date)
+    if (source or os.environ.get("MOCK_FIXTURES", "synthetic")) == "footballdata":
+        from .fixtures_source import load_footballdata_upcoming
+
+        PROVIDER_UPCOMING_FIXTURES.clear()
+        PROVIDER_UPCOMING_FIXTURES.update(
+            {fixture.match_id: fixture for fixture in load_footballdata_upcoming()}
+        )
+    else:
+        PROVIDER_UPCOMING_FIXTURES.clear()
     _LAST_LOAD = time.time()
     FIXTURES[:] = fixtures
     FIXTURES_BY_ID.clear()
@@ -127,6 +137,8 @@ def refresh_live_data() -> None:
 def fixture_for_id(match_id: str) -> Fixture:
     if match_id in FIXTURES_BY_ID:
         return FIXTURES_BY_ID[match_id]
+    if match_id in PROVIDER_UPCOMING_FIXTURES:
+        return PROVIDER_UPCOMING_FIXTURES[match_id]
     return PROVIDER_LIVE_FIXTURES[match_id]
 
 
@@ -138,6 +150,7 @@ __all__ = [
     "FIXTURES_BY_ID",
     "PROVIDER_LIVE_FIXTURES",
     "PROVIDER_LIVE_PAYLOADS",
+    "PROVIDER_UPCOMING_FIXTURES",
     "Fixture",
     "H2HMatch",
     "SYNTHETIC_TEAMS",

@@ -1,8 +1,16 @@
 import pytest
+from datetime import datetime, timezone
 
 from mocksite import simulator
 from mocksite.app import create_app
-from mocksite.data import FIXTURES, PROVIDER_LIVE_FIXTURES, PROVIDER_LIVE_PAYLOADS, refresh_live_data
+from mocksite.data import (
+    FIXTURES,
+    PROVIDER_LIVE_FIXTURES,
+    PROVIDER_LIVE_PAYLOADS,
+    PROVIDER_UPCOMING_FIXTURES,
+    refresh_live_data,
+)
+from mocksite.fixtures_source import Fixture
 from mocksite.store import store_match_events, store_match_payloads, store_match_stats
 
 
@@ -57,6 +65,7 @@ def test_provider_detail_renders_all_stats_and_events(tmp_path, monkeypatch):
             "yellow_cards": {"home": 0, "away": 2, "total": 2},
             "dangerous_attacks": {"home": 20, "away": 18, "total": 38},
             "throwins": {"home": None, "away": None, "total": None},
+            "goal_kicks": {"home": 3, "away": 4, "total": 7},
             "penalties_won": {"home": 0, "away": 1, "total": 1},
             "xg": {"home": 1.2, "away": 0.7, "total": 1.9},
             "half_time_goals": {"home": 1, "away": 0, "total": 1},
@@ -77,6 +86,7 @@ def test_provider_detail_renders_all_stats_and_events(tmp_path, monkeypatch):
     assert "Žlté karty" in body
     assert "Nebezpečné útoky" in body
     assert "Vhadzovania" in body
+    assert "Odkopy od brány" in body
     assert "Vybojované penalty" in body
     assert "xG" in body
     assert "Góly v polčase" in body
@@ -126,11 +136,47 @@ def test_provider_live_set_drives_index_and_detail(monkeypatch, tmp_path):
 def test_empty_provider_live_section_is_explicit(monkeypatch):
     monkeypatch.setenv("MOCK_FIXTURES", "footballdata")
     monkeypatch.setenv("MOCK_REFRESH_S", "0")
+    monkeypatch.setenv("MOCK_CLOCK", "real")
+    monkeypatch.setenv("WERKZEUG_RUN_MAIN", "false")
     PROVIDER_LIVE_FIXTURES.clear()
     PROVIDER_LIVE_PAYLOADS.clear()
     body = create_app().test_client().get("/").get_data(as_text=True)
     assert "Momentálne sa nehrá žiadny zápas z API" in body
     assert "MOCK_CLOCK=demo" in body
+
+
+def test_provider_upcoming_feed_is_merged_and_dates_are_displayed(monkeypatch):
+    monkeypatch.setenv("MOCK_FIXTURES", "footballdata")
+    monkeypatch.setenv("MOCK_REFRESH_S", "0")
+    monkeypatch.setenv("MOCK_CLOCK", "real")
+    monkeypatch.setenv("WERKZEUG_RUN_MAIN", "false")
+    future = Fixture(
+        match_id="m-upcoming",
+        home="Vzdialení Domáci",
+        away="Vzdialení Hostia",
+        kickoff_utc=datetime(2099, 12, 31, 20, 30, tzinfo=timezone.utc),
+        competition="Budúca liga",
+    )
+    earlier = Fixture(
+        match_id="m-earlier",
+        home="Skorší Domáci",
+        away="Skorší Hostia",
+        kickoff_utc=datetime(2099, 12, 30, 20, 30, tzinfo=timezone.utc),
+        competition="Budúca liga",
+    )
+    PROVIDER_LIVE_FIXTURES.clear()
+    PROVIDER_LIVE_PAYLOADS.clear()
+    PROVIDER_UPCOMING_FIXTURES.clear()
+    PROVIDER_UPCOMING_FIXTURES[future.match_id] = future
+    PROVIDER_UPCOMING_FIXTURES[earlier.match_id] = earlier
+    try:
+        body = create_app().test_client().get("/").get_data(as_text=True)
+        assert "Vzdialení Domáci" in body
+        assert "31.12.2099 20:30" in body
+        assert body.index("Skorší Domáci") < body.index("Vzdialení Domáci")
+        assert 'data-testid="upcoming-section"' in body
+    finally:
+        PROVIDER_UPCOMING_FIXTURES.clear()
 
 
 def test_livescore_exposes_h2h_rows(client):

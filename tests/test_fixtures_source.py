@@ -154,6 +154,32 @@ def test_footballdata_live_stats_are_parsed_and_persisted(monkeypatch, tmp_path)
     assert latest_match_events("77")[0]["event_type"] == "goal"
 
 
+def test_footballdata_upcoming_feed_is_normalized_and_persisted(monkeypatch, tmp_path):
+    monkeypatch.setenv("FOOTBALLDATA_API_KEY", "fd_test_key")
+    monkeypatch.setenv("MOCK_DB_PATH", str(tmp_path / "upcoming.sqlite3"))
+    upcoming_match = {
+        "match_id": 88,
+        "date_unix": 4102444800,
+        "status": "incomplete",
+        "league": {"league_id": 9, "name": "Liga"},
+        "home_team": {"team_id": 12, "team_name": "C"},
+        "away_team": {"team_id": 13, "team_name": "D"},
+    }
+
+    def fake_get(path, cache_key, max_age_s):
+        assert path == "fixtures/upcoming?limit=100"
+        return {"matches": [upcoming_match]}
+
+    monkeypatch.setattr(fixtures_source, "_footballdata_get", fake_get)
+    fixtures = fixtures_source.load_footballdata_upcoming()
+    assert [fixture.match_id for fixture in fixtures] == ["m88"]
+    assert fixtures[0].kickoff_display == "01.01.2100 00:00"
+    from mocksite.store import connect
+
+    with connect() as connection:
+        assert connection.execute("select count(*) from matches").fetchone()[0] == 1
+
+
 def test_footballdata_league_filter_accepts_id_or_name(footballdata_api):
     by_id = fixtures_source.load_footballdata(date(2026, 8, 13), "12")
     by_name = fixtures_source.load_footballdata(date(2026, 8, 13), "premier league")
