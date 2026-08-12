@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}{{ fixture.home }} – {{ fixture.away }}{% endblock %}
+{% block content %}
+<h2 data-testid="match-title">{{ fixture.home }} – {{ fixture.away }}</h2>
+
+<div class="card" data-testid="live-panel" data-match-id="{{ fixture.match_id }}">
+  <h3>Live štatistiky</h3>
+  <p>
+    <span class="badge" data-field="minute">{{ state.minute }}'</span>
+    <strong data-field="score">{{ state.home_goals }}:{{ state.away_goals }}</strong>
+  </p>
+  <table data-testid="live-stats">
+    <tbody>
+      <tr data-stat="shots">
+        <td data-field="home">{{ state.home_shots }}</td><td>Strely</td><td data-field="away">{{ state.away_shots }}</td>
+      </tr>
+      <tr data-stat="corners">
+        <td data-field="home">{{ state.home_corners }}</td><td>Rohy</td><td data-field="away">{{ state.away_corners }}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h3>Vzájomné zápasy (H2H)</h3>
+  <table data-testid="h2h-table">
+    <thead><tr><th>Dátum</th><th>Domáci</th><th>Hostia</th><th>Výsledok</th><th>Spolu</th></tr></thead>
+    <tbody>
+    {% for m in fixture.h2h %}
+      <tr data-testid="h2h-row">
+        <td data-field="date">{{ m.played_on.isoformat() }}</td>
+        <td data-field="home">{{ m.home }}</td>
+        <td data-field="away">{{ m.away }}</td>
+        <td data-field="score">{{ m.home_goals }}:{{ m.away_goals }}</td>
+        <td data-field="total">{{ m.total_goals }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

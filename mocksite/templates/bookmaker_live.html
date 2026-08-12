@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Live ponuka{% endblock %}
+{% block content %}
+<h2>Live ponuka – Počet gólov 2.5</h2>
+
+{% for fixture, state in rows %}
+<div class="card" data-testid="offer-card" data-match-id="{{ fixture.match_id }}">
+  <div>
+    <strong data-field="event-name">{{ fixture.home }} – {{ fixture.away }}</strong>
+    <span class="badge" data-field="minute">{{ state.minute }}'</span>
+    <span class="badge" data-field="score">{{ state.home_goals }}:{{ state.away_goals }}</span>
+  </div>
+  <div style="margin-top:10px">
+  {% if state.settled %}
+    <span class="badge" data-testid="market-settled">Trh vyrovnaný</span>
+  {% else %}
+    <button class="odds-btn" data-testid="odds-button" data-market="over_2.5"
+            data-match-id="{{ fixture.match_id }}" data-odds="{{ state.over25_odds }}">
+      Viac ako 2.5 <span data-field="odds">{{ state.over25_odds }}</span>
+    </button>
+    <button class="odds-btn" data-testid="odds-button" data-market="under_2.5"
+            data-match-id="{{ fixture.match_id }}" data-odds="{{ state.under25_odds }}">
+      Menej ako 2.5 <span data-field="odds">{{ state.under25_odds }}</span>
+    </button>
+  {% endif %}
+  </div>
+</div>
+{% endfor %}
+
+<div class="slip" data-testid="betslip">
+  <h3>Tiket</h3>
+  <div data-testid="slip-selection" data-empty="true">Tiket je prázdny</div>
+  <label for="stake-input">Vklad (€)</label>
+  <input id="stake-input" data-testid="stake-input" type="number" min="0.1" step="0.1" value="">
+  <div class="muted">Možná výhra: <span data-testid="potential-return">0.00</span> €</div>
+  <button class="submit-btn" data-testid="submit-ticket">Podať tiket</button>
+  <div data-testid="ticket-status" class="muted" style="margin-top:8px"></div>
+</div>
+
+<script>
+const slip = { matchId: null, market: null, odds: null, event: null };
+const selectionEl = document.querySelector('[data-testid="slip-selection"]');
+const stakeEl = document.querySelector('[data-testid="stake-input"]');
+const returnEl = document.querySelector('[data-testid="potential-return"]');
+const statusEl = document.querySelector('[data-testid="ticket-status"]');
+
+function renderSlip() {
+  if (!slip.matchId) {
+    selectionEl.textContent = 'Tiket je prázdny';
+    selectionEl.dataset.empty = 'true';
+  } else {
+    selectionEl.dataset.empty = 'false';
+    selectionEl.dataset.matchId = slip.matchId;
+    selectionEl.dataset.market = slip.market;
+    selectionEl.dataset.odds = slip.odds;
+    selectionEl.innerHTML =
+      `<div>${slip.event}</div><div>${slip.market} @ <b data-field="odds">${slip.odds}</b></div>`;
+  }
+  const stake = parseFloat(stakeEl.value || '0');
+  returnEl.textContent = (slip.odds ? stake * slip.odds : 0).toFixed(2);
+}
+
+document.querySelectorAll('[data-testid="odds-button"]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const card = btn.closest('[data-testid="offer-card"]');
+    slip.matchId = btn.dataset.matchId;
+    slip.market = btn.dataset.market;
+    slip.odds = parseFloat(btn.dataset.odds);
+    slip.event = card.querySelector('[data-field="event-name"]').textContent.trim();
+    statusEl.textContent = '';
+    renderSlip();
+  });
+});
+
+stakeEl.addEventListener('input', renderSlip);
+
+document.querySelector('[data-testid="submit-ticket"]').addEventListener('click', async () => {
+  if (!slip.matchId) { statusEl.textContent = 'Najprv vyber kurz.'; return; }
+  const stake = parseFloat(stakeEl.value || '0');
+  if (!(stake > 0)) { statusEl.textContent = 'Zadaj vklad.'; return; }
+  const response = await fetch('/book/api/betslip', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selection: slip, stake }),
+  });
+  const data = await response.json();
+  statusEl.textContent = `Tiket ${data.ticket_id} prijatý (sandbox, bez peňazí).`;
+  statusEl.dataset.ticketId = data.ticket_id;
+});
+</script>
+{% endblock %}

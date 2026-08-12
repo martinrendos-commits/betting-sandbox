@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Betting sandbox{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Lokálny tréningový sandbox</h2>
+  <p>Dve simulované stránky na nácvik scrapingu a modelovania kurzov:</p>
+  <ul>
+    <li><a href="/livescore/">Mock Livescore</a> – zápasy dňa, H2H história, live štatistiky</li>
+    <li><a href="/book/live">Mock Bookmaker</a> – live ponuka over/under 2.5, tiket, podanie</li>
+  </ul>
+  <p class="muted">Všetky dáta sú generované lokálne z fixného seedu.</p>
+</div>
+{% endblock %}

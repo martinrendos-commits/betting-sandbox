@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Zápasy dňa{% endblock %}
+{% block content %}
+<h2>Zápasy dňa</h2>
+<table data-testid="match-table">
+  <thead>
+    <tr><th>Výkop</th><th>Domáci</th><th>Hostia</th><th>Skóre</th><th>Minúta</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for fixture, state in rows %}
+    <tr data-testid="match-row" data-match-id="{{ fixture.match_id }}">
+      <td data-field="kickoff">{{ fixture.kickoff }}</td>
+      <td data-field="home">{{ fixture.home }}</td>
+      <td data-field="away">{{ fixture.away }}</td>
+      <td data-field="score">{{ state.home_goals }}:{{ state.away_goals }}</td>
+      <td data-field="minute">{{ state.minute }}'</td>
+      <td><a data-testid="match-link" href="/livescore/match/{{ fixture.match_id }}">detail</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
