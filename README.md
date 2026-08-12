@@ -150,11 +150,38 @@ Formát vlastného JSON súboru:
 Keď na dnešný deň v danej lige nie sú zápasy, program to povie a nič potichu
 nenahradí – `fixtures` vypíše najbližšie hracie dni.
 
+## Lokálna databáza a ratingy
+
+Každý stiahnutý zápas z `footballdata.io` alebo OpenLigaDB sa priebežne ukladá
+do SQLite databázy. Predvolená cesta je `data/sandbox.sqlite3`; inú cestu možno
+nastaviť premennou prostredia `MOCK_DB_PATH`. Zápisy sú zámerne nepovinné:
+problém so súborom alebo zámkom databázy nezhodí lokálny server.
+
+Na spätné stiahnutie posledných dní použite napríklad:
+
+```bash
+python -m sandbox_bot backfill --fixtures footballdata --days 30
+```
+
+Príkaz rešpektuje existujúcu diskovú cache poskytovateľa. Uložené dokončené
+výsledky sa dajú zobraziť podľa ligy:
+
+```bash
+python -m sandbox_bot ratings
+python -m sandbox_bot ratings --league 9
+```
+
+`ratings` počíta ligový priemer gólov a silu útoku/obrany doma aj vonku.
+Tieto hodnoty tvoria Poissonov odhad oddelene pre každú súťaž. Pri malej vzorke
+(menej ako tri dokončené zápasy ligy alebo tímu) sa použije konzervatívny
+ligový alebo providerový xG odhad, nie nespoľahlivá sila tímu.
+
 ## Štruktúra
 
 ```
 mocksite/           lokálne simulované stránky
   fixtures_source.py zdroje rozpisu: footballdata.io / OpenLigaDB / vlastný JSON / syntetický
+  store.py          SQLite úložisko stiahnutých líg, tímov a zápasov
   data.py           aktuálne načítaný rozpis (FIXTURES) + reload
   simulator.py      stav zápasu (scheduled/live/finished), časová os + kurzy s maržou
   app.py            Flask: /livescore a /book
@@ -164,6 +191,7 @@ sandbox_bot/
   browser.py        Playwright session – dva nezávislé kontexty (livescore + kancelária)
   pages/            page objects; selektory sú v jednom slovníku na vrchu triedy
   odds.py           Poisson model, férový kurz, marža, edge, Kelly
+  ratings.py        Poisson ratingy výsledkov podľa súťaže
   analysis.py       predzápasový model z H2H
   monitor.py        live slučka, porovnávač, príprava tiketu + potvrdenie človekom
   backtest.py       offline vyhodnotenie pravidla nad simulovanými zápasmi

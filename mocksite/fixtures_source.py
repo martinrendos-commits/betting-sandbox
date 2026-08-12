@@ -173,6 +173,12 @@ def load_openligadb(league: str, on_date: date, seasons_back: int = HISTORY_SEAS
 
     if not all_matches:
         raise RuntimeError(f"OpenLigaDB nevrátilo žiadne zápasy pre ligu {league!r}")
+    from .store import store_fixture_payloads
+
+    try:
+        store_fixture_payloads(all_matches, source="openliga")
+    except Exception as exc:
+        log.warning("Uloženie OpenLigaDB zápasov zlyhalo: %s", exc)
 
     finished: list[tuple[datetime, str, str, int, int]] = []
     for match in all_matches:
@@ -303,7 +309,8 @@ def _fixture_from_footballdata(match: dict, with_h2h: bool) -> Fixture:
     home, away = home_team["team_name"], away_team["team_name"]
     # Pre-match xG is the provider's own expected-goals estimate, which is exactly
     # the lambda the local Poisson simulator needs.
-    prematch = (match.get("xg") or {}).get("prematch") or {}
+    xg_payload = match.get("xg") or {}
+    prematch = xg_payload.get("prematch") or xg_payload
     lam_home = float(prematch.get("home") or LEAGUE_AVG_GOALS_PER_TEAM)
     lam_away = float(prematch.get("away") or LEAGUE_AVG_GOALS_PER_TEAM)
     h2h = (
@@ -346,6 +353,12 @@ def load_footballdata(
     )
 
     matches = data.get("matches", [])
+    from .store import store_match_payloads
+
+    try:
+        store_match_payloads(matches, source="footballdata")
+    except Exception as exc:
+        log.warning("Uloženie footballdata zápasov zlyhalo: %s", exc)
     if league:
         wanted = league.strip().lower()
         matches = [

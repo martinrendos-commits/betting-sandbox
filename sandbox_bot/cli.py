@@ -5,9 +5,10 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-from datetime import date
+from datetime import date, timedelta
 
 from mocksite.env_file import load_env_file
+from mocksite.store import connect
 
 from .config import SETTINGS
 
@@ -66,6 +67,14 @@ def main(argv: list[str] | None = None) -> int:
     backtest.add_argument("--staking", choices=["flat", "kelly"], default="flat")
     backtest.add_argument("--threshold", type=float, default=SETTINGS.value_threshold)
     backtest.add_argument("--bankroll", type=float, default=100.0)
+
+    backfill = sub.add_parser("backfill", help="stiahne a uloží rozpis do lokálnej DB")
+    backfill.add_argument("--fixtures", choices=["footballdata", "openliga"], default="footballdata")
+    backfill.add_argument("--days", type=int, default=30)
+    backfill.add_argument("--league", default="")
+
+    ratings = sub.add_parser("ratings", help="vypíše Poisson ratingy z uložených výsledkov")
+    ratings.add_argument("--league", default="")
 
     args = parser.parse_args(argv)
     logging.basicConfig(
@@ -148,6 +157,57 @@ def main(argv: list[str] | None = None) -> int:
             bankroll=args.bankroll, threshold=args.threshold, staking=args.staking
         )
         print(result.describe())
+        return 0
+
+    if args.command == "backfill":
+        if args.days < 1 or args.days > 365:
+            parser.error("--days musí byť v intervale 1 až 365")
+        from mocksite.fixtures_source import load_fixtures
+
+        total = 0
+        for offset in range(args.days):
+            day = date.today() - timedelta(days=offset)
+            try:
+                fixtures = load_fixtures(args.fixtures, league=args.league or None, on_date=day)
+                total += len(fixtures)
+                print(f"{day.isoformat()}: {len(fixtures)} zápasov")
+            except (OSError, RuntimeError, ValueError) as exc:
+                print(f"{day.isoformat()}: chyba – {exc}")
+        with connect() as connection:
+            stored = connection.execute(
+                "SELECT COUNT(*) FROM matches WHERE source = ?", (args.fixtures,)
+            ).fetchone()[0]
+        print(f"Uložených zápasov: {stored} (načítaných v rozvrhu: {total})")
+        return 0
+
+    if args.command == "ratings":
+        from .ratings import load_league_rating
+
+        with connect() as connection:
+            league_rows = connection.execute(
+                "SELECT league_id, name FROM leagues ORDER BY name"
+            ).fetchall()
+        selected = [
+            row
+            for row in league_rows
+            if not args.league
+            or str(row[0]).lower() == args.league.lower()
+            or args.league.lower() in str(row[1]).lower()
+        ]
+        if not selected:
+            print("V databáze nie sú uložené žiadne ligy.")
+            return 0
+        for league_id, league_name in selected:
+            rating = load_league_rating(str(league_id))
+            if rating is None:
+                continue
+            print(f"\n{league_name} ({league_id}) – {rating.matches} dokončených zápasov")
+            print(f"Priemer gólov: doma {rating.average_home_goals:.2f}, vonku {rating.average_away_goals:.2f}")
+            if rating.fallback:
+                print(f"Malá vzorka (< {3} zápasy tímu alebo ligy): použije sa ligový/xG odhad.")
+            for team in sorted(rating.teams, key=lambda item: item.home_attack, reverse=True)[:10]:
+                print(f"  {team.name}: útok doma {team.home_attack:.2f}, obrana doma {team.home_defence:.2f}, "
+                      f"útok vonku {team.away_attack:.2f}, obrana vonku {team.away_defence:.2f}")
         return 0
 
     return 1

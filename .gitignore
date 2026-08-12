@@ -5,3 +5,5 @@ artifacts/
 .pytest_cache/
 .cache/
 .env
+data/
+*.sqlite3
