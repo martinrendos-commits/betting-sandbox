@@ -353,17 +353,70 @@ def deeplinks_batch(ids: list[str]) -> dict:
 
 def normalize_events(payload: dict) -> list[dict]:
     data = payload.get("data") or []
-    return [dict(item) for item in data if isinstance(item, dict) and item.get("id")]
+    rows: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        if not item.get("home_team") or not item.get("away_team"):
+            continue
+        if str(item.get("market_type", "")).casefold() == "outright":
+            continue
+        if bool(item.get("is_player_prop")):
+            continue
+        rows.append(dict(item))
+    return rows
+
+
+def _selection_key(row: dict) -> str:
+    market = str(row.get("market_type") or "").casefold()
+    selection = str(row.get("selection") or "").casefold()
+    if market == "moneyline":
+        if selection in {"draw", "tie", "x"} or "draw" in selection or selection.startswith("tie"):
+            return "draw"
+        home = str(row.get("home_team") or "").casefold()
+        away = str(row.get("away_team") or "").casefold()
+        if selection == home:
+            return "home"
+        if selection == away:
+            return "away"
+    if market == "total_goals":
+        try:
+            line = float(row.get("line") or 0)
+        except (TypeError, ValueError):
+            line = 0.0
+        if selection.startswith("over"):
+            return "over_2_5" if line == 2.5 else "over"
+        if selection.startswith("under"):
+            return "under_2_5" if line == 2.5 else "under"
+    return selection
 
 
 def normalize_odds(payload: dict) -> list[dict]:
     data = payload.get("data") or []
-    return [dict(item) for item in data if isinstance(item, dict) and item.get("event_id", item.get("event"))]
+    rows: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        event = item.get("event")
+        event_id = item.get("event_id") or (event.get("id") if isinstance(event, dict) else event)
+        if not event_id:
+            continue
+        row = dict(item)
+        row["event_id"] = str(event_id)
+        row["is_player_prop"] = bool(item.get("is_player_prop")) or str(item.get("market_type", "")).casefold().startswith("player_")
+        row["market_concept"] = {
+            "moneyline": "1x2",
+            "total_goals": "over_under",
+        }.get(str(item.get("market_type") or "").casefold())
+        row["selection_key"] = _selection_key(row)
+        rows.append(row)
+    return rows
 
 
 def _norm_team(value: str) -> str:
     text = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode().casefold()
     tokens = [token for token in text.replace("-", " ").split() if token not in {"fc", "afc", "sc", "cf", "mls"}]
+    tokens = ["saint" if token == "st" else token for token in tokens]
     return " ".join(tokens)
 
 
@@ -412,16 +465,51 @@ def refresh_for_fixtures(fixtures: list[object], *, limit: int = 10) -> tuple[in
     payload = events(sport="soccer", limit=200)
     events_payload_id = _LAST_PAYLOAD_ID
     event_rows = normalize_events(payload)
+    market_payload = markets()
+    market_data = market_payload.get("data") or []
+    market_types = {
+        str(row.get("id") or row.get("name")).casefold()
+        for row in market_data
+        if isinstance(row, dict)
+        and (not row.get("sport") or str(row.get("sport")).casefold() == "soccer")
+    }
+    if "moneyline" in market_types:
+        main_market = "main"
+    elif "total_goals" in market_types:
+        main_market = "total_goals"
+    else:
+        main_market = None
+    odds_rows: list[dict] = []
+    main_params: dict[str, object] = {"sport": "soccer", "limit": 200}
+    if main_market:
+        main_params["market"] = main_market
+    for odds_payload in (
+        odds(**main_params),
+        odds(sport="soccer", is_live=True, limit=200),
+    ):
+        odds_payload_id = _LAST_PAYLOAD_ID
+        normalized = normalize_odds(odds_payload)
+        odds_rows.extend(normalized)
+        for row in normalized:
+            if not row.get("home_team") or not row.get("away_team") or row["event_id"] in {str(event["id"]) for event in event_rows}:
+                continue
+            event_rows.append(
+                {
+                    "id": row["event_id"],
+                    "sport": row.get("sport"),
+                    "league": row.get("league"),
+                    "home_team": row.get("home_team"),
+                    "away_team": row.get("away_team"),
+                    "start_time": row.get("event_start_time"),
+                    "status": "live" if row.get("is_live") else "upcoming",
+                    "is_live": row.get("is_live"),
+                }
+            )
     store_sharp_events(event_rows, raw_payload_id=events_payload_id)
     links = match_events_to_fixtures(event_rows, fixtures)
     for link in links:
         store_sharp_event_link(link["event_id"], link["match_id"], link["confidence"])
     linked_ids = {str(link["event_id"]) for link in links}
-    event_ids = [str(row["id"]) for row in event_rows if str(row["id"]) in linked_ids][:limit]
-    odds_count = 0
-    for event_id in event_ids:
-        odds_payload = event_odds(event_id)
-        odds_payload_id = _LAST_PAYLOAD_ID
-        odds_rows = normalize_odds(odds_payload)
-        odds_count += store_sharp_odds(odds_rows, raw_payload_id=odds_payload_id)
+    stored_odds = [row for row in odds_rows if row["event_id"] in linked_ids]
+    odds_count = store_sharp_odds(stored_odds, raw_payload_id=_LAST_PAYLOAD_ID)
     return len(event_rows), odds_count

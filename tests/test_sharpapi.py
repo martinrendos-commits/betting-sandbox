@@ -14,6 +14,7 @@ def test_sharpapi_request_uses_api_key_and_persists(monkeypatch, tmp_path):
     monkeypatch.setenv("MOCK_DB_PATH", str(tmp_path / "sharp.sqlite3"))
     monkeypatch.setenv("MOCK_CACHE_DIR", str(tmp_path / "cache"))
     sharpapi_source._REQUEST_TIMES.clear()
+    sharpapi_source._SERVER_LIMIT = None
 
     class Response:
         headers = Message()
@@ -30,8 +31,8 @@ def test_sharpapi_request_uses_api_key_and_persists(monkeypatch, tmp_path):
     seen = {}
 
     def fake_urlopen(request, timeout):
-        seen["key"] = request.headers["X-api-key"]
-        seen["url"] = request.full_url
+        seen.setdefault("key", request.headers["X-api-key"])
+        seen.setdefault("url", request.full_url)
         return Response()
 
     monkeypatch.setattr(sharpapi_source.urllib.request, "urlopen", fake_urlopen)
@@ -123,6 +124,54 @@ def test_sharpapi_normalization_and_matching(tmp_path, monkeypatch):
         [{"event_id": "sharp-1", "sportsbook": "draftkings", "market_type": "moneyline", "selection": "MSK Zilina", "odds_decimal": 2.1}]
     ) == 1
     assert latest_sharp_odds("sharp-1")[0]["odds_decimal"] == 2.1
+
+
+def test_soccer_markets_normalize_moneyline_draw_and_total_line():
+    payload = {
+        "data": [
+            {
+                "event_id": "e1",
+                "sport": "soccer",
+                "market_type": "moneyline",
+                "home_team": "Home FC",
+                "away_team": "Away FC",
+                "selection": "Draw",
+                "odds_decimal": 3.2,
+            },
+            {
+                "event_id": "e1",
+                "sport": "soccer",
+                "market_type": "total_goals",
+                "selection": "Over",
+                "line": 2.5,
+                "odds_decimal": 2.0,
+            },
+        ]
+    }
+    rows = sharpapi_source.normalize_odds(payload)
+    assert rows[0]["market_concept"] == "1x2"
+    assert rows[0]["selection_key"] == "draw"
+    assert rows[1]["market_concept"] == "over_under"
+    assert rows[1]["selection_key"] == "over_2_5"
+
+
+def test_sharpapi_excludes_outrights_and_props_from_events():
+    payload = {
+        "data": [
+            {"id": "match", "sport": "soccer", "home_team": "A", "away_team": "B"},
+            {"id": "future", "sport": "soccer", "home_team": "League", "away_team": "", "market_type": "outright"},
+            {"id": "prop", "sport": "soccer", "home_team": "A", "away_team": "B", "is_player_prop": True},
+        ]
+    }
+    assert [row["id"] for row in sharpapi_source.normalize_events(payload)] == ["match"]
+    odds = sharpapi_source.normalize_odds(
+        {"data": [
+            {"event_id": "future", "market_type": "outright", "selection": "League", "odds_decimal": 5},
+            {"event_id": "match", "market_type": "player_goals", "is_player_prop": True, "selection": "Player", "odds_decimal": 4},
+        ]}
+    )
+    assert len(odds) == 2
+    assert all(row["is_player_prop"] or row["market_type"] == "outright" for row in odds)
 
 
 def test_match_detail_uses_sharpapi_rows_when_linked(tmp_path, monkeypatch):

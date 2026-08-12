@@ -178,6 +178,16 @@ def create_schema(connection: sqlite3.Connection) -> None:
             "last_updated": "TEXT",
         },
     )
+    _add_columns(
+        connection,
+        "sharp_odds_snapshots",
+        {
+            "line": "REAL",
+            "market_concept": "TEXT",
+            "selection_key": "TEXT",
+            "is_player_prop": "INTEGER NOT NULL DEFAULT 0",
+        },
+    )
     connection.commit()
 
 
@@ -410,12 +420,14 @@ def store_sharp_odds(
         for row in odds:
             connection.execute(
                 "INSERT INTO sharp_odds_snapshots(event_id, sportsbook, market_type, selection, odds_decimal, "
-                "odds_american, odds_probability, is_live, timestamp, fetched_at, raw_payload_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "odds_american, odds_probability, is_live, timestamp, fetched_at, raw_payload_id, line, "
+                "market_concept, selection_key, is_player_prop) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (_text(row.get("event_id")) or "", _text(row.get("sportsbook")) or "",
                  _text(row.get("market_type")) or "", _text(row.get("selection")),
                  row.get("odds_decimal"), row.get("odds_american"), row.get("odds_probability"),
-                 int(bool(row.get("is_live"))), _text(row.get("timestamp")), fetched_at, raw_payload_id),
+                 int(bool(row.get("is_live"))), _text(row.get("timestamp")), fetched_at, raw_payload_id,
+                 row.get("line"), _text(row.get("market_concept")), _text(row.get("selection_key")),
+                 int(bool(row.get("is_player_prop")))),
             )
         return len(odds)
 
@@ -445,13 +457,15 @@ def latest_sharp_odds(event_id: str | None = None) -> list[dict]:
         else:
             rows = connection.execute(
                 "SELECT event_id, sportsbook, market_type, selection, odds_decimal, odds_american, odds_probability, "
-                "is_live, timestamp FROM sharp_odds_snapshots WHERE event_id=? AND fetched_at = "
+                "is_live, timestamp, line, market_concept, selection_key, is_player_prop "
+                "FROM sharp_odds_snapshots WHERE event_id=? AND fetched_at = "
                 "(SELECT max(current.fetched_at) FROM sharp_odds_snapshots AS current WHERE current.event_id=?) "
                 "ORDER BY sportsbook, market_type, selection",
                 (event_id, event_id),
             ).fetchall()
     keys = ("event_id", "sportsbook", "market_type", "selection", "odds_decimal", "odds_american",
-            "odds_probability", "is_live", "timestamp")
+            "odds_probability", "is_live", "timestamp", "line", "market_concept", "selection_key",
+            "is_player_prop")
     return [dict(zip(keys, row)) for row in rows]
 
 

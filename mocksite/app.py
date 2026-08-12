@@ -157,6 +157,7 @@ def _local_fair_odds(fixture) -> list[dict]:
     lam_home = max((fixture.home_attack + fixture.away_defence) / 2, 0.1)
     lam_away = max((fixture.away_attack + fixture.home_defence) / 2, 0.1)
     under = 0.0
+    home_win = draw = away_win = 0.0
     for home in range(10):
         for away in range(10):
             probability = (
@@ -165,9 +166,18 @@ def _local_fair_odds(fixture) -> list[dict]:
             )
             if home + away <= 2:
                 under += probability
+            if home > away:
+                home_win += probability
+            elif home == away:
+                draw += probability
+            else:
+                away_win += probability
     return [
-        {"market": "total_goals", "selection": "over_2_5", "odds": round(1 / max(1 - under, 0.001), 3)},
-        {"market": "total_goals", "selection": "under_2_5", "odds": round(1 / max(under, 0.001), 3)},
+        {"market": "1x2", "selection": "home", "odds": round(1 / max(home_win, 0.001), 3)},
+        {"market": "1x2", "selection": "draw", "odds": round(1 / max(draw, 0.001), 3)},
+        {"market": "1x2", "selection": "away", "odds": round(1 / max(away_win, 0.001), 3)},
+        {"market": "over_under", "selection": "over_2_5", "odds": round(1 / max(1 - under, 0.001), 3)},
+        {"market": "over_under", "selection": "under_2_5", "odds": round(1 / max(under, 0.001), 3)},
     ]
 
 
